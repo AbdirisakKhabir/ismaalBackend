@@ -1,0 +1,144 @@
+// This is your Prisma schema file
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                 Int                  @id @default(autoincrement())
+  email              String               @unique
+  password           String
+  name               String
+  plan_id            Int                  @default(1)
+  role               Role                 @default(USER)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  businesses         Business[]
+  plans              Plans[]
+  products           Product[]
+  professional       Professional?
+  PlanUpgradeRequest PlanUpgradeRequest[]
+}
+
+model Business {
+  id            Int      @id @default(autoincrement())
+  name          String
+  description   String   @db.Text
+  category      String
+  image         String?
+  status        Status   @default(PENDING)
+  owner         User     @relation(fields: [ownerId], references: [id])
+  ownerId       Int
+  phone         String
+  email         String
+  location      String
+  submittedDate DateTime @default(now())
+  businessType  String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Product {
+  id            Int      @id @default(autoincrement())
+  name          String
+  description   String   @db.Text
+  price         Decimal
+  category      String
+  image         String?
+  status        Status   @default(PENDING)
+  user          User     @relation(fields: [userId], references: [id])
+  userId        Int
+  submittedDate DateTime @default(now())
+  location      String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// Add this enum if not already defined
+enum UpgradeRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model PlanUpgradeRequest {
+  id              Int                  @id @default(autoincrement())
+  user            User                 @relation(fields: [userId], references: [id])
+  userId          Int
+  currentPlan     Plans                @relation("CurrentPlan", fields: [currentPlanId], references: [id])
+  currentPlanId   Int
+  requestedPlan   Plans                @relation("RequestedPlan", fields: [requestedPlanId], references: [id])
+  requestedPlanId Int
+  amount          Decimal
+  status          UpgradeRequestStatus @default(PENDING)
+  paymentMethod   String
+  transactionId   String?
+  phoneNumber     String?
+  screenshot      String? // Image of payment proof
+  adminNotes      String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  // Remove these duplicate fields:
+  // Plans           Plans?               @relation(fields: [plansId], references: [id])
+  // plansId         Int?
+}
+
+model Plans {
+  id                Int      @id @default(autoincrement())
+  name              String
+  description       String   @db.Text
+  price             Decimal  @default(0)
+  allowedBusinesses Int      @default(1)
+  allowedProducts   Int      @default(1)
+  user              User     @relation(fields: [userId], references: [id])
+  userId            Int
+  profile_status    String   @default("Not Approved")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Correct relations - only one of each
+  currentPlanRequests   PlanUpgradeRequest[] @relation("CurrentPlan")
+  requestedPlanRequests PlanUpgradeRequest[] @relation("RequestedPlan")
+
+  // Remove these duplicates:
+  // PlanUpgradeRequest PlanUpgradeRequest[]
+  // PlanUpgradeRequest PlanUpgradeRequest[]
+}
+
+model Professional {
+  id            Int      @id @default(autoincrement())
+  user          User     @relation(fields: [userId], references: [id])
+  userId        Int      @unique
+  profession    String
+  specialty     String
+  experience    String
+  location      String
+  phone         String
+  email         String
+  image         String?
+  status        Status   @default(PENDING)
+  submittedDate DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum Status {
+  PENDING
+  APPROVED
+  REJECTED
+  ACTIVE
+  INACTIVE
+  // ... other status values
+}
