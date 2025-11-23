@@ -228,6 +228,122 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
   }
 });
 
+// CREATE plan
+const validateUpdateUserData = (data) => {
+  // Check if any field is provided
+  if (Object.keys(data).length === 0) {
+    return "No fields provided for update.";
+  }
+
+  // Basic validation for name
+  if (
+    data.name !== undefined && // Check only if field is present
+    (typeof data.name !== "string" || data.name.trim().length < 2)
+  ) {
+    return "Name must be a valid string of at least 2 characters.";
+  }
+
+  // Basic validation for email format
+  if (data.email) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(data.email)) {
+      return "Invalid email format.";
+    }
+  }
+
+  // 🌟 NEW: Basic validation for password 🌟
+  if (data.password !== undefined) {
+    if (typeof data.password !== "string" || data.password.length < 8) {
+      return "Password must be at least 8 characters long.";
+    }
+    // Optionally check for confirmation password if needed, but not required by this API signature
+  }
+
+  // Phone and Location can be optional and free-form strings
+  if (data.phone !== undefined && typeof data.phone !== "string") {
+    return "Phone must be a string.";
+  }
+  if (data.location !== undefined && typeof data.location !== "string") {
+    return "Location must be a string.";
+  }
+
+  return null; // Validation passed
+};
+
+// --- 🌟 UPDATED UPDATE USER API ROUTE 🌟 ---
+app.patch("/api/users/:id", async (req, res) => {
+  const userIdToUpdate = parseInt(req.params.id, 10);
+  const updateData = req.body;
+
+  // 1. Basic Validation
+  if (isNaN(userIdToUpdate)) {
+    return res.status(400).json({ error: "Invalid User ID provided." });
+  }
+
+  const validationError = validateUpdateUserData(updateData);
+  if (validationError) {
+    return res.status(400).json({ error: validationError });
+  }
+
+  try {
+    // 3. Prepare data for Prisma
+    const dataToUpdate = {};
+
+    // Copy simple fields if they exist
+    if (updateData.name !== undefined) dataToUpdate.name = updateData.name;
+    if (updateData.email !== undefined) dataToUpdate.email = updateData.email;
+    if (updateData.phone !== undefined) dataToUpdate.phone = updateData.phone;
+    if (updateData.location !== undefined)
+      dataToUpdate.location = updateData.location;
+
+    // 🌟 CHANGE: Handle Password Hashing 🌟
+    if (updateData.password !== undefined) {
+      const hashedPassword = await bcrypt.hash(updateData.password, 10);
+      dataToUpdate.password = hashedPassword;
+    }
+
+    if (Object.keys(dataToUpdate).length === 0) {
+      return res
+        .status(400)
+        .json({ error: "No valid fields provided for update." });
+    }
+
+    // 4. Update the user in the database
+    const updatedUser = await prisma.user.update({
+      where: { id: userIdToUpdate },
+      data: dataToUpdate,
+      // Select fields to return to the client (EXCLUDE PASSWORD)
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        phone: true,
+        location: true,
+        role: true,
+        plan_id: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    // 5. Success Response
+    res.json(updatedUser);
+  } catch (error) {
+    console.error("Error updating user profile:", error);
+
+    // 6. Handle unique constraint error (e.g., email already exists)
+    if (error.code === "P2002" && error.meta?.target?.includes("email")) {
+      return res.status(409).json({
+        error: "This email is already registered to another account.",
+      });
+    }
+
+    res
+      .status(500)
+      .json({ error: "Failed to update profile due to a server error." });
+  }
+});
+
 app.post("/api/plans", async (req, res) => {
   try {
     const validationError = validatedPlanData(req.body);
@@ -324,7 +440,6 @@ app.delete("/api/plans/:id", async (req, res) => {
   }
 });
 
-// GET user's current usage - FIXED
 // GET user's current usage - FIXED with enum values
 app.get("/api/users/:userId/usage", async (req, res) => {
   try {
@@ -409,8 +524,11 @@ app.get("/api/users/:userId/usage", async (req, res) => {
   }
 });
 
+// 🌟 UPDATED: app.post("/api/businesses") 🌟
 app.post("/api/businesses", async (req, res) => {
   try {
+    // 1. Run the updated server-side validation
+    // This validation must now check for 3 images and exclude businessType validation.
     const validationError = validateBusinessData(req.body);
     if (validationError) {
       return res.status(400).json({ error: validationError });
@@ -418,7 +536,7 @@ app.post("/api/businesses", async (req, res) => {
 
     const { ownerId } = req.body;
 
-    // Get user data
+    // 2. Limit Check Logic (remains the same)
     const user = await prisma.user.findUnique({
       where: { id: ownerId },
       include: {
@@ -434,7 +552,6 @@ app.post("/api/businesses", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // Get user's active plan
     let activePlan = null;
     if (user.plan_id) {
       activePlan = await prisma.plans.findUnique({
@@ -442,7 +559,6 @@ app.post("/api/businesses", async (req, res) => {
       });
     }
 
-    // Fallback to default plan
     if (!activePlan) {
       activePlan = await prisma.plans.findUnique({
         where: { id: 1 }, // Default plan ID
@@ -465,6 +581,7 @@ app.post("/api/businesses", async (req, res) => {
       });
     }
 
+    // 3. Create Business (uses req.body, which now contains the image string and hardcoded businessType)
     const business = await prisma.business.create({
       data: { ...req.body },
     });
@@ -477,14 +594,37 @@ app.post("/api/businesses", async (req, res) => {
 });
 
 // Enhanced product creation with plan validation
+// NOTE: This server-side validator is now integrated based on your request.
+const validateProductData = (data) => {
+  // 🌟 MODIFIED REQUIRED FIELDS: Added 'image' (for the URL string) 🌟
+  const required = [
+    "name",
+    "description",
+    "price",
+    "category",
+    "userId",
+    "location",
+    "image", // Ensure the comma-separated URL string is present
+  ];
+  for (const field of required) {
+    if (!data[field]) return `${field} is required`;
+  }
+  if (isNaN(parseFloat(data.price)) || parseFloat(data.price) <= 0) {
+    return "Price must be a positive number";
+  }
+  return null;
+};
+
 app.post("/api/products", async (req, res) => {
   try {
+    // 🌟 Using the provided server-side validation 🌟
     const validationError = validateProductData(req.body);
     if (validationError) {
       return res.status(400).json({ error: validationError });
     }
 
-    const { userId } = req.body;
+    // Deconstruct fields, ensuring we parse the price if needed
+    const { userId, price, ...otherData } = req.body;
 
     // Check user's product limit
     const userUsage = await prisma.user.findUnique({
@@ -520,14 +660,23 @@ app.post("/api/products", async (req, res) => {
       });
     }
 
+    // Prepare data for Prisma
     const product = await prisma.product.create({
-      data: { ...req.body },
+      data: {
+        ...otherData,
+        userId: userId, // Ensure userId is included
+        price: parseFloat(price), // Explicitly convert price to a number
+        status: otherData.status || "PENDING", // Use status from body or default to PENDING
+      },
     });
 
     res.json(product);
   } catch (error) {
     console.error("Error creating product:", error);
-    res.status(400).json({ error: error.message });
+    res.status(400).json({
+      error:
+        error.message || "An unknown error occurred during product creation.",
+    });
   }
 });
 
@@ -584,32 +733,40 @@ app.patch("/api/businesses/:id/status", async (req, res) => {
   }
 });
 
-// Product routes
-const validateProductData = (data) => {
-  const required = [
-    "name",
-    "description",
-    "price",
-    "category",
-    "userId",
-    "location",
-  ];
-  for (const field of required) {
-    if (!data[field]) return `${field} is required`;
+const processProductData = (product) => {
+  if (product.image && typeof product.image === "string") {
+    // Split the comma-separated string into an array of URLs, trimming whitespace
+    const imagesArray = product.image
+      .split(",")
+      .map((url) => url.trim())
+      .filter((url) => url.length > 0);
+    return {
+      ...product,
+      images: imagesArray, // New field with array of URLs
+      primaryImage: imagesArray[0] || null, // Optional: for quick access to the main image
+      // We keep the original 'image' field for compatibility, but the client should use 'images' or 'primaryImage'
+    };
   }
-  if (isNaN(parseFloat(data.price)) || parseFloat(data.price) <= 0) {
-    return "Price must be a positive number";
-  }
-  return null;
+  return {
+    ...product,
+    images: [],
+    primaryImage: null,
+  };
 };
 
+// --- Product Listing API ---
 app.get("/api/products", async (req, res) => {
   try {
     const products = await prisma.product.findMany({
       where: { status: "APPROVED" },
     });
-    res.json(products);
+
+    // 🌟 CHANGE: Process the image field for the client 🌟
+    const processedProducts = products.map(processProductData);
+
+    res.json(processedProducts);
   } catch (error) {
+    console.error("Error fetching products:", error);
     res.status(400).json({ error: error.message });
   }
 });
@@ -1522,6 +1679,82 @@ app.get("/api/admin/upgrade-requests/stats", async (req, res) => {
   } catch (error) {
     console.error("Error fetching upgrade stats:", error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// --- Get Products by User ID (Already existed implicitly, but defined here) ---
+app.get("/api/users/:userId/products", async (req, res) => {
+  const userId = parseInt(req.params.userId, 10);
+
+  if (isNaN(userId)) {
+    return res.status(400).json({ error: "Invalid User ID." });
+  }
+
+  // NOTE: Add Authorization check here to ensure only the owner or an admin can view this
+
+  try {
+    const products = await prisma.product.findMany({
+      where: { ownerId: userId },
+      // Select fields to return to minimize data transfer
+      select: {
+        id: true,
+        name: true,
+        image: true,
+        status: true,
+        price: true,
+        inStock: true,
+        rating: true,
+        description: true,
+      },
+    });
+
+    // You might want to process the image field here if it's stored as a comma-separated string
+    const processedProducts = products.map((p) => ({
+      ...p,
+      // Basic image processing if needed (e.g., getting only the first image URL)
+      image: p.image ? p.image.split(",")[0].trim() : null,
+    }));
+
+    res.json(processedProducts);
+  } catch (error) {
+    console.error("Error fetching user products:", error);
+    res.status(500).json({ error: "Failed to fetch user products." });
+  }
+});
+
+app.get("/api/users/:userId/businesses", async (req, res) => {
+  const userId = parseInt(req.params.userId, 10);
+
+  if (isNaN(userId)) {
+    return res.status(400).json({ error: "Invalid User ID." });
+  }
+
+  // NOTE: Add Authorization check here
+
+  try {
+    const businesses = await prisma.business.findMany({
+      where: { ownerId: userId },
+      // Select fields to return to minimize data transfer
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        status: true,
+        category: true,
+        image: true,
+      },
+    });
+
+    // You might want to process the image field here if it's stored as a comma-separated string
+    const processedBusinesses = businesses.map((b) => ({
+      ...b,
+      image: b.image ? b.image.split(",")[0].trim() : null,
+    }));
+
+    res.json(processedBusinesses);
+  } catch (error) {
+    console.error("Error fetching user businesses:", error);
+    res.status(500).json({ error: "Failed to fetch user businesses." });
   }
 });
 

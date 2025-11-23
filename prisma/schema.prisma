@@ -30,7 +30,7 @@ model Business {
   name          String
   description   String   @db.Text
   category      String
-  image         String?
+  image         String? // Stored as a comma-separated string (e.g., "url1,url2,url3")
   status        Status   @default(PENDING)
   owner         User     @relation(fields: [ownerId], references: [id])
   ownerId       Int
@@ -38,7 +38,7 @@ model Business {
   email         String
   location      String
   submittedDate DateTime @default(now())
-  businessType  String
+  businessType  String? // 🌟 UPDATED: Made nullable as it's not collected by the client
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
