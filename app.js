@@ -811,10 +811,10 @@ app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
   }
 
   // Validate data using the mock function
-  const validationError = validateUpdateData(req.body);
-  if (validationError) {
-    return res.status(400).json({ error: validationError });
-  }
+  // const validationError = validateUpdateData(req.body);
+  // if (validationError) {
+  //   return res.status(400).json({ error: validationError });
+  // }
 
   // Prepare price for update if present
   let parsedPrice;
@@ -864,7 +864,7 @@ app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
       product: updatedProduct,
     });
   } catch (error) {
-    console.error("Error updating product:", error);
+    console.error("Error updating product:", error.message);
     res.status(500).json({ error: "Failed to update product listing." });
   }
 });
