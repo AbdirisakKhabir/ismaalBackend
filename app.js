@@ -270,6 +270,26 @@ const validateUpdateUserData = (data) => {
   return null; // Validation passed
 };
 
+const isAuthenticated = (req, res, next) => {
+  // SECURITY NOTE: This is a placeholder. In production, this should validate a JWT token.
+  if (req.headers["x-user-id"]) {
+    req.userId = req.headers["x-user-id"]; // Assuming the auth middleware attaches the user ID
+    next();
+  } else {
+    res.status(401).json({
+      error: "Authentication required. Please provide 'x-user-id' header.",
+    });
+  }
+};
+
+const validateUpdateData = (data) => {
+  // In a real app, check field formats (e.g., price is numeric, email is valid)
+  if (data.price && isNaN(parseFloat(data.price))) {
+    return "Price must be a valid number.";
+  }
+  return null;
+};
+
 // --- 🌟 UPDATED UPDATE USER API ROUTE 🌟 ---
 app.patch("/api/users/:id", async (req, res) => {
   const userIdToUpdate = parseInt(req.params.id, 10);
@@ -691,6 +711,72 @@ app.get("/api/businesses", async (req, res) => {
   }
 });
 
+app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
+  const currentUserId = req.userId; // Logged-in user's ID
+  const businessId = req.params.id; // Business ID from URL parameter
+
+  // Destructure all editable fields from the request body
+  // We ignore 'ownerId' from the body to prevent unauthorized transfer of ownership
+  const { name, description, category, phone, email, images, ...updateData } =
+    req.body;
+
+  if (!businessId) {
+    return res.status(400).json({ error: "Business ID is required." });
+  }
+
+  // Check if at least one field is provided for update
+  const providedFields = { name, description, category, phone, email, images };
+  if (Object.values(providedFields).every((val) => val === undefined)) {
+    return res.status(400).json({ error: "No fields provided for update." });
+  }
+
+  try {
+    // 1. Verify ownership (Find the business and check its ownerId)
+    const existingBusiness = await prisma.business.findUnique({
+      where: { id: businessId },
+      select: { ownerId: true },
+    });
+
+    if (!existingBusiness) {
+      return res.status(404).json({ error: "Business listing not found." });
+    }
+
+    // Security check: only the owner can update the business
+    if (existingBusiness.ownerId !== currentUserId) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: You do not own this business listing." });
+    }
+
+    // Prepare update data dynamically
+    const dataToUpdate = {
+      ...(name && { name }),
+      ...(description && { description }),
+      ...(category && { category }),
+      ...(phone && { phone }),
+      ...(email && { email }),
+      ...(images && { images }),
+      // Mandatory for any update: reset status and update timestamp
+      status: "PENDING",
+      updatedAt: new Date(),
+    };
+
+    // 2. Perform the update
+    const updatedBusiness = await prisma.business.update({
+      where: { id: businessId },
+      data: dataToUpdate,
+    });
+
+    res.status(200).json({
+      message: "Business updated successfully and reset to PENDING review.",
+      business: updatedBusiness,
+    });
+  } catch (error) {
+    console.error("Error updating business:", error);
+    res.status(500).json({ error: "Failed to update business listing." });
+  }
+});
+
 // Get all businesses (for admin)
 app.get("/api/admin/businesses", async (req, res) => {
   try {
@@ -768,6 +854,80 @@ app.get("/api/products", async (req, res) => {
   } catch (error) {
     console.error("Error fetching products:", error);
     res.status(400).json({ error: error.message });
+  }
+});
+
+app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
+  const currentUserId = req.userId; // Logged-in user's ID
+  const productId = req.params.id; // Product ID from URL parameter
+
+  // Destructure editable fields (using 'userId' for owner field, mirroring your POST logic)
+  const { name, description, price, inStock, ...updateData } = req.body;
+
+  if (!productId) {
+    return res.status(400).json({ error: "Product ID is required." });
+  }
+
+  // Check if at least one field is provided for update
+  if (!name && !description && !price && typeof inStock === "undefined") {
+    return res.status(400).json({ error: "No fields provided for update." });
+  }
+
+  // Validate data using the mock function
+  const validationError = validateUpdateData(req.body);
+  if (validationError) {
+    return res.status(400).json({ error: validationError });
+  }
+
+  // Prepare price for update if present
+  let parsedPrice;
+  if (price !== undefined) {
+    // Explicitly parse price to float, consistent with your POST endpoint
+    parsedPrice = parseFloat(price);
+  }
+
+  try {
+    // 1. Verify ownership (Find the product and check its owner's ID)
+    const existingProduct = await prisma.product.findUnique({
+      where: { id: productId },
+      select: { userId: true }, // Assuming the owner field is named 'userId'
+    });
+
+    if (!existingProduct) {
+      return res.status(404).json({ error: "Product listing not found." });
+    }
+
+    // Security check: only the owner can update the product
+    if (existingProduct.userId !== currentUserId) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: You do not own this product listing." });
+    }
+
+    // Prepare update data dynamically
+    const dataToUpdate = {
+      ...(name && { name }),
+      ...(description && { description }),
+      ...(price !== undefined && { price: parsedPrice }),
+      ...(typeof inStock !== "undefined" && { inStock }),
+      // Mandatory for any update: reset status and update timestamp
+      status: "PENDING",
+      updatedAt: new Date(),
+    };
+
+    // 2. Perform the update
+    const updatedProduct = await prisma.product.update({
+      where: { id: productId },
+      data: dataToUpdate,
+    });
+
+    res.status(200).json({
+      message: "Product updated successfully and reset to PENDING review.",
+      product: updatedProduct,
+    });
+  } catch (error) {
+    console.error("Error updating product:", error);
+    res.status(500).json({ error: "Failed to update product listing." });
   }
 });
 
