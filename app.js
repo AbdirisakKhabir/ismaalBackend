@@ -204,32 +204,41 @@ const isAdmin = async (userId) => {
 
 app.post("/api/upload", upload.array("images"), async (req, res) => {
   console.log("[UPLOAD] Receiving file(s) for Cloudinary...");
+  console.log("[UPLOAD] Files received:", req.files?.length);
+  console.log("[UPLOAD] Headers:", req.headers);
+
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: "No image files provided" });
     }
 
-    // Map over files and create upload promises
+    // Log file details for debugging
+    req.files.forEach((file, index) => {
+      console.log(`[UPLOAD] File ${index + 1}:`, {
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+        size: file.size,
+        fieldname: file.fieldname,
+      });
+    });
+
     const uploadPromises = req.files.map((file) => {
       // Convert buffer to base64 Data URI
       const b64 = Buffer.from(file.buffer).toString("base64");
       const dataURI = "data:" + file.mimetype + ";base64," + b64;
 
-      // Upload to Cloudinary concurrently
       return cloudinary.uploader.upload(dataURI, {
         folder: "caafiCare",
         resource_type: "auto",
       });
     });
 
-    // Wait for all uploads to complete
     const results = await Promise.all(uploadPromises);
 
     console.log(
       `[UPLOAD] Cloudinary success: ${results.length} files uploaded.`
     );
 
-    // Return an array of uploaded image details
     res.json(
       results.map((result) => ({
         imageUrl: result.secure_url,
