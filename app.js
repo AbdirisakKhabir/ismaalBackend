@@ -794,47 +794,42 @@ app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
 });
 
 app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
-  const currentUserId = req.userId; // Logged-in user's ID
-  const productId = req.params.id; // Product ID from URL parameter
+  const currentUserId = req.userId;
+  const productId = parseInt(req.params.id, 10);
 
-  // Destructure editable fields (removed 'inStock', added 'category' and 'location')
-  const { name, description, price, category, location, ...updateData } =
-    req.body;
+  const { name, description, price, category, location } = req.body;
 
   if (!productId) {
     return res.status(400).json({ error: "Product ID is required." });
   }
-  console.log(req.body);
-  // Check if at least one field is provided for update
+
   if (!name && !description && !price && !category && !location) {
     return res.status(400).json({ error: "No fields provided for update." });
   }
 
-  // Validate data using the mock function
-  // const validationError = validateUpdateData(req.body);
-  // if (validationError) {
-  //   return res.status(400).json({ error: validationError });
-  // }
+  // Client-side validation check
+  const validationError = validateUpdateData(req.body);
+  if (validationError) {
+    return res.status(400).json({ error: validationError });
+  }
 
-  // Prepare price for update if present
   let parsedPrice;
   if (price !== undefined) {
-    // Explicitly parse price to float, consistent with your POST endpoint
     parsedPrice = parseFloat(price);
   }
 
   try {
-    // 1. Verify ownership (Find the product and check its owner's ID)
+    // 1. Verify existence and ownership
     const existingProduct = await prisma.product.findUnique({
       where: { id: productId },
-      select: { userId: true }, // Assuming the owner field is named 'userId'
+      select: { userId: true },
     });
 
     if (!existingProduct) {
       return res.status(404).json({ error: "Product listing not found." });
     }
 
-    // Security check: only the owner can update the product
+    // Authorization check
     if (existingProduct.userId !== currentUserId) {
       return res
         .status(403)
@@ -846,12 +841,13 @@ app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
       ...(name && { name }),
       ...(description && { description }),
       ...(price !== undefined && { price: parsedPrice }),
-      ...(category && { category }), // Include category
-      ...(location && { location }), // Include location
-      // Mandatory for any update: reset status and update timestamp
-      status: "APPROVED",
+      ...(category && { category }),
+      ...(location && { location }),
+      status: "PENDING",
       updatedAt: new Date(),
     };
+
+    console.log("[Product Update] Data to be saved:", dataToUpdate);
 
     // 2. Perform the update
     const updatedProduct = await prisma.product.update({
@@ -864,8 +860,27 @@ app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
       product: updatedProduct,
     });
   } catch (error) {
-    console.error("Error updating product:", error.message);
-    res.status(500).json({ error: "Failed to update product listing." });
+    console.error("Error updating product:", error);
+
+    if (error.code === "P2025") {
+      // P2025: Record to update not found
+      return res
+        .status(404)
+        .json({ error: "The product was not found or has been deleted." });
+    }
+    if (error.code === "P2003") {
+      // P2003: Foreign key constraint failed (e.g., trying to link to a non-existent category/location)
+      return res.status(400).json({
+        error:
+          "Invalid data provided. Category or location data may be unrecognized.",
+      });
+    }
+
+    // Default generic error
+    res.status(500).json({
+      error:
+        "Failed to update product listing due to an internal server issue. Please try again or contact support.",
+    });
   }
 });
 
