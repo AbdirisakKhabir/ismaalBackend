@@ -849,7 +849,7 @@ app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
       ...(category && { category }), // Include category
       ...(location && { location }), // Include location
       // Mandatory for any update: reset status and update timestamp
-      status: "PENDING",
+      status: "APPROVED",
       updatedAt: new Date(),
     };
 
