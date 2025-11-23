@@ -202,29 +202,45 @@ const isAdmin = async (userId) => {
   return user?.role === "ADMIN";
 };
 
-app.post("/api/upload", upload.single("image"), async (req, res) => {
+app.post("/api/upload", upload.array("images"), async (req, res) => {
+  console.log("[UPLOAD] Receiving file(s) for Cloudinary...");
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No image file provided" });
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: "No image files provided" });
     }
 
-    // Convert buffer to base64
-    const b64 = Buffer.from(req.file.buffer).toString("base64");
-    const dataURI = "data:" + req.file.mimetype + ";base64," + b64;
+    // Map over files and create upload promises
+    const uploadPromises = req.files.map((file) => {
+      // Convert buffer to base64 Data URI
+      const b64 = Buffer.from(file.buffer).toString("base64");
+      const dataURI = "data:" + file.mimetype + ";base64," + b64;
 
-    // Upload to Cloudinary
-    const result = await cloudinary.uploader.upload(dataURI, {
-      folder: "caafiCare",
-      resource_type: "auto",
+      // Upload to Cloudinary concurrently
+      return cloudinary.uploader.upload(dataURI, {
+        folder: "caafiCare",
+        resource_type: "auto",
+      });
     });
 
-    res.json({
-      imageUrl: result.secure_url,
-      publicId: result.public_id,
-    });
+    // Wait for all uploads to complete
+    const results = await Promise.all(uploadPromises);
+
+    console.log(
+      `[UPLOAD] Cloudinary success: ${results.length} files uploaded.`
+    );
+
+    // Return an array of uploaded image details
+    res.json(
+      results.map((result) => ({
+        imageUrl: result.secure_url,
+        publicId: result.public_id,
+      }))
+    );
   } catch (error) {
     console.error("Upload error:", error);
-    res.status(500).json({ error: "Failed to upload image" });
+    res.status(500).json({
+      error: error.message || "Failed to upload images to Cloudinary",
+    });
   }
 });
 
