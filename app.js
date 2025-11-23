@@ -270,17 +270,17 @@ const validateUpdateUserData = (data) => {
   return null; // Validation passed
 };
 
-// const isAuthenticated = (req, res, next) => {
-//   // SECURITY NOTE: This is a placeholder. In production, this should validate a JWT token.
-//   if (req.headers["x-user-id"]) {
-//     req.userId = req.headers["x-user-id"]; // Assuming the auth middleware attaches the user ID
-//     next();
-//   } else {
-//     res.status(401).json({
-//       error: "Authentication required. Please provide 'x-user-id' header.",
-//     });
-//   }
-// };
+const isAuthenticated = (req, res, next) => {
+  // SECURITY NOTE: This is a placeholder. In production, this should validate a JWT token.
+  if (req.headers["x-user-id"]) {
+    req.userId = req.headers["x-user-id"]; // Assuming the auth middleware attaches the user ID
+    next();
+  } else {
+    res.status(401).json({
+      error: "Authentication required. Please provide 'x-user-id' header.",
+    });
+  }
+};
 
 const validateUpdateData = (data) => {
   // In a real app, check field formats (e.g., price is numeric, email is valid)
@@ -711,7 +711,7 @@ app.get("/api/businesses", async (req, res) => {
   }
 });
 
-app.patch("/api/businesses/:id", async (req, res) => {
+app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
   const currentUserId = req.userId; // Logged-in user's ID
   const businessId = req.params.id; // Business ID from URL parameter
 
@@ -793,7 +793,7 @@ app.patch("/api/businesses/:id", async (req, res) => {
   }
 });
 
-app.patch("/api/products/:id", async (req, res) => {
+app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
   const currentUserId = req.userId; // Logged-in user's ID
   const productId = req.params.id; // Product ID from URL parameter
 
@@ -804,7 +804,7 @@ app.patch("/api/products/:id", async (req, res) => {
   if (!productId) {
     return res.status(400).json({ error: "Product ID is required." });
   }
-
+  console.log(req.body);
   // Check if at least one field is provided for update
   if (!name && !description && !price && !category && !location) {
     return res.status(400).json({ error: "No fields provided for update." });
