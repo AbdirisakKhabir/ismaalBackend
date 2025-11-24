@@ -827,7 +827,7 @@ app.post("/api/products", async (req, res) => {
 
     console.log(`Processing product submission for user ${userId}`);
 
-    // CORRECTED: Get user with active products (NO plan include)
+    // CORRECTED: Get user WITHOUT any plan include
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: {
@@ -843,6 +843,8 @@ app.post("/api/products", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
+    console.log(`User found: ${user.name}, plan_id: ${user.plan_id}`);
+
     // CORRECTED: Get plan separately using user.plan_id
     const activePlan = await prisma.plans.findUnique({
       where: {
@@ -854,8 +856,16 @@ app.post("/api/products", async (req, res) => {
       return res.status(400).json({ error: "No active plan found" });
     }
 
+    console.log(
+      `Active plan: ${activePlan.name}, allowed products: ${activePlan.allowedProducts}`
+    );
+
     const productLimit = activePlan.allowedProducts;
     const currentProductCount = user.products.length;
+
+    console.log(
+      `Current product count: ${currentProductCount}, Limit: ${productLimit}`
+    );
 
     if (currentProductCount >= productLimit) {
       return res.status(403).json({
