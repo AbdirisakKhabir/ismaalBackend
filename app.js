@@ -731,11 +731,11 @@ app.post("/api/products", async (req, res) => {
     // Deconstruct fields, ensuring we parse the price if needed
     const { userId, price, ...otherData } = req.body;
 
-    // Check user's product limit
+    // Check user's product limit - FIXED INCLUDE STATEMENT
     const userUsage = await prisma.user.findUnique({
       where: { id: userId },
       include: {
-        plan: true,
+        plans: true, // ← CHANGED FROM 'plan' TO 'plans'
         products: {
           where: {
             status: "ACTIVE", // Only count active products
@@ -748,7 +748,15 @@ app.post("/api/products", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    const activePlan = userUsage.plan;
+    // Get the active plan - FIXED PLAN ACCESS
+    let activePlan = userUsage.plans[0]; // ← ACCESS FROM PLANS ARRAY
+    if (!activePlan) {
+      // If no plan in the array, get the default plan based on plan_id
+      activePlan = await prisma.plans.findUnique({
+        where: { id: userUsage.plan_id },
+      });
+    }
+
     if (!activePlan) {
       return res.status(400).json({ error: "No active plan found" });
     }
@@ -769,13 +777,17 @@ app.post("/api/products", async (req, res) => {
     const product = await prisma.product.create({
       data: {
         ...otherData,
-        userId: userId, // Ensure userId is included
-        price: parseFloat(price), // Explicitly convert price to a number
-        status: otherData.status || "PENDING", // Use status from body or default to PENDING
+        userId: userId,
+        price: parseFloat(price),
+        status: otherData.status || "PENDING",
       },
     });
 
-    res.json(product);
+    res.json({
+      success: true,
+      product,
+      message: "Product submitted successfully",
+    });
   } catch (error) {
     console.error("Error creating product:", error);
     res.status(400).json({
