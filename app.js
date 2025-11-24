@@ -489,13 +489,14 @@ app.delete("/api/plans/:id", async (req, res) => {
 app.get("/api/users/:userId/usage", async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
+    console.log(`Fetching usage data for user ${userId}`);
 
-    // Get user with businesses and products - REMOVE the status filter for now
+    // Get user with businesses and products
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: {
-        businesses: true, // Remove where clause for now
-        products: true, // Remove where clause for now
+        businesses: true,
+        products: true,
       },
     });
 
@@ -503,26 +504,18 @@ app.get("/api/users/:userId/usage", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // Get the active plan using the user's plan_id
-    let activePlan = null;
-    if (user.plan_id) {
-      activePlan = await prisma.plans.findUnique({
-        where: { id: user.plan_id },
-      });
-    }
+    console.log(`User found: ${user.name}, plan_id: ${user.plan_id}`);
 
-    // If no plan_id set, get the first plan associated with the user
-    if (!activePlan) {
-      const userPlans = await prisma.plans.findMany({
-        where: { userId: user.id },
-        take: 1,
-        orderBy: { createdAt: "desc" },
-      });
-      activePlan = userPlans.length > 0 ? userPlans[0] : null;
-    }
+    // CORRECTED: Get the plan using user.plan_id directly
+    let activePlan = await prisma.plans.findUnique({
+      where: {
+        id: user.plan_id || 1, // Use user's plan_id or default to plan 1
+      },
+    });
 
-    // Fallback to default plan if no plan found
+    // If no plan found with plan_id, get the default plan
     if (!activePlan) {
+      console.log(`No plan found with id ${user.plan_id}, using default plan`);
       activePlan = await prisma.plans.findUnique({
         where: { id: 1 }, // Default plan ID
       });
@@ -532,7 +525,11 @@ app.get("/api/users/:userId/usage", async (req, res) => {
       return res.status(400).json({ error: "No plan configuration found" });
     }
 
-    // Count only ACTIVE or APPROVED businesses/products (adjust based on your enum)
+    console.log(
+      `Active plan: ${activePlan.name}, allowed businesses: ${activePlan.allowedBusinesses}, allowed products: ${activePlan.allowedProducts}`
+    );
+
+    // Count only ACTIVE or APPROVED businesses/products
     const activeBusinesses = user.businesses.filter(
       (business) =>
         business.status === "ACTIVE" || business.status === "APPROVED"
@@ -561,6 +558,11 @@ app.get("/api/users/:userId/usage", async (req, res) => {
         ),
       },
     };
+
+    console.log(`Usage data for user ${userId}:`, {
+      businesses: `${usage.businesses.count}/${usage.businesses.limit}`,
+      products: `${usage.products.count}/${usage.products.limit}`,
+    });
 
     res.json(usage);
   } catch (error) {
