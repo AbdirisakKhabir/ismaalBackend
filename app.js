@@ -573,15 +573,24 @@ app.get("/api/users/:userId/usage", async (req, res) => {
 app.post("/api/businesses", async (req, res) => {
   try {
     // 1. Run the updated server-side validation
-    // This validation must now check for 3 images and exclude businessType validation.
     const validationError = validateBusinessData(req.body);
     if (validationError) {
       return res.status(400).json({ error: validationError });
     }
 
-    const { ownerId } = req.body;
+    const {
+      name,
+      description,
+      category,
+      phone,
+      email,
+      location,
+      images, // This should be an array of image URLs
+      ownerId,
+      businessType = "GENERAL",
+    } = req.body;
 
-    // 2. Limit Check Logic (remains the same)
+    // 2. Limit Check Logic (same as above)
     const user = await prisma.user.findUnique({
       where: { id: ownerId },
       include: {
@@ -606,7 +615,7 @@ app.post("/api/businesses", async (req, res) => {
 
     if (!activePlan) {
       activePlan = await prisma.plans.findUnique({
-        where: { id: 1 }, // Default plan ID
+        where: { id: 1 },
       });
     }
 
@@ -626,15 +635,66 @@ app.post("/api/businesses", async (req, res) => {
       });
     }
 
-    // 3. Create Business (uses req.body, which now contains the image string and hardcoded businessType)
-    const business = await prisma.business.create({
-      data: { ...req.body },
+    // 3. Create Business and Images in a transaction
+    const result = await prisma.$transaction(async (prisma) => {
+      // Create business first
+      const business = await prisma.business.create({
+        data: {
+          name,
+          description,
+          category,
+          phone,
+          email,
+          location,
+          ownerId,
+          status: "PENDING",
+          businessType,
+        },
+      });
+
+      // Then create image records if images are provided
+      if (images && images.length > 0) {
+        await prisma.businessImage.createMany({
+          data: images.map((url, index) => ({
+            url: url,
+            order: index + 1,
+            businessId: business.id,
+          })),
+        });
+      }
+
+      return business;
     });
 
-    res.json(business);
+    // 4. Return the created business with images
+    const businessWithImages = await prisma.business.findUnique({
+      where: { id: result.id },
+      include: {
+        images: {
+          orderBy: {
+            order: "asc",
+          },
+        },
+        owner: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    res.json({
+      success: true,
+      business: businessWithImages,
+      message: "Business submitted for approval",
+    });
   } catch (error) {
     console.error("Error creating business:", error);
-    res.status(400).json({ error: error.message });
+    res.status(400).json({
+      error: error.message || "Failed to create business",
+    });
   }
 });
 
