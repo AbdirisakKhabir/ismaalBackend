@@ -815,18 +815,17 @@ app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
 
 app.post("/api/products", async (req, res) => {
   try {
-    // 🌟 Using the provided server-side validation 🌟
+    // Validation
     const validationError = validateProductData(req.body);
     if (validationError) {
       return res.status(400).json({ error: validationError });
     }
 
-    // Deconstruct fields, ensuring we parse the price if needed
     const { userId, price, ...otherData } = req.body;
 
     console.log(`Processing product submission for user ${userId}`);
 
-    // Check user's product limit - CORRECTED INCLUDE STATEMENT
+    // CORRECTED: Get user with active products (NO plan include)
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: {
@@ -842,9 +841,7 @@ app.post("/api/products", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    console.log(`User found: ${user.name}, plan_id: ${user.plan_id}`);
-
-    // Get user's plan based on plan_id
+    // CORRECTED: Get plan separately using user.plan_id
     const activePlan = await prisma.plans.findUnique({
       where: {
         id: user.plan_id || 1,
@@ -855,16 +852,8 @@ app.post("/api/products", async (req, res) => {
       return res.status(400).json({ error: "No active plan found" });
     }
 
-    console.log(
-      `Active plan: ${activePlan.name}, allowed products: ${activePlan.allowedProducts}`
-    );
-
     const productLimit = activePlan.allowedProducts;
     const currentProductCount = user.products.length;
-
-    console.log(
-      `Current product count: ${currentProductCount}, Limit: ${productLimit}`
-    );
 
     if (currentProductCount >= productLimit) {
       return res.status(403).json({
@@ -875,7 +864,7 @@ app.post("/api/products", async (req, res) => {
       });
     }
 
-    // Prepare data for Prisma
+    // Create the product
     const product = await prisma.product.create({
       data: {
         ...otherData,
@@ -883,28 +872,12 @@ app.post("/api/products", async (req, res) => {
         price: parseFloat(price),
         status: otherData.status || "PENDING",
       },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-      },
     });
-
-    console.log(`Product created successfully: ${product.name}`);
 
     res.json({
       success: true,
       product,
       message: "Product submitted for approval",
-      limits: {
-        current: currentProductCount + 1,
-        limit: productLimit,
-        remaining: productLimit - (currentProductCount + 1),
-      },
     });
   } catch (error) {
     console.error("Error creating product:", error);
