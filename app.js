@@ -813,6 +813,124 @@ app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
   }
 });
 
+app.post("/api/products", async (req, res) => {
+  try {
+    // 🌟 Using the provided server-side validation 🌟
+    const validationError = validateProductData(req.body);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
+
+    // Deconstruct fields, ensuring we parse the price if needed
+    const { userId, price, ...otherData } = req.body;
+
+    console.log(`Processing product submission for user ${userId}`);
+
+    // Check user's product limit - CORRECTED INCLUDE STATEMENT
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        products: {
+          where: {
+            status: "ACTIVE",
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    console.log(`User found: ${user.name}, plan_id: ${user.plan_id}`);
+
+    // Get user's plan based on plan_id
+    const activePlan = await prisma.plans.findUnique({
+      where: {
+        id: user.plan_id || 1,
+      },
+    });
+
+    if (!activePlan) {
+      return res.status(400).json({ error: "No active plan found" });
+    }
+
+    console.log(
+      `Active plan: ${activePlan.name}, allowed products: ${activePlan.allowedProducts}`
+    );
+
+    const productLimit = activePlan.allowedProducts;
+    const currentProductCount = user.products.length;
+
+    console.log(
+      `Current product count: ${currentProductCount}, Limit: ${productLimit}`
+    );
+
+    if (currentProductCount >= productLimit) {
+      return res.status(403).json({
+        error: `Product limit reached. You can only create ${productLimit} product(s) with your ${activePlan.name}.`,
+        code: "PRODUCT_LIMIT_REACHED",
+        currentCount: currentProductCount,
+        limit: productLimit,
+      });
+    }
+
+    // Prepare data for Prisma
+    const product = await prisma.product.create({
+      data: {
+        ...otherData,
+        userId: userId,
+        price: parseFloat(price),
+        status: otherData.status || "PENDING",
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    console.log(`Product created successfully: ${product.name}`);
+
+    res.json({
+      success: true,
+      product,
+      message: "Product submitted for approval",
+      limits: {
+        current: currentProductCount + 1,
+        limit: productLimit,
+        remaining: productLimit - (currentProductCount + 1),
+      },
+    });
+  } catch (error) {
+    console.error("Error creating product:", error);
+    res.status(400).json({
+      error: error.message || "Failed to create product",
+    });
+  }
+});
+
+// --- Product Listing API ---
+app.get("/api/products", async (req, res) => {
+  try {
+    const products = await prisma.product.findMany({
+      where: { status: "APPROVED" },
+    });
+
+    // 🌟 CHANGE: Process the image field for the client 🌟
+    const processedProducts = products.map(processProductData);
+
+    res.json(processedProducts);
+  } catch (error) {
+    console.error("Error fetching products:", error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
 app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
   const currentUserId = req.userId;
   const productId = parseInt(req.params.id, 10);
@@ -966,124 +1084,6 @@ const processProductData = (product) => {
     primaryImage: null,
   };
 };
-
-app.post("/api/products", async (req, res) => {
-  try {
-    // 🌟 Using the provided server-side validation 🌟
-    const validationError = validateProductData(req.body);
-    if (validationError) {
-      return res.status(400).json({ error: validationError });
-    }
-
-    // Deconstruct fields, ensuring we parse the price if needed
-    const { userId, price, ...otherData } = req.body;
-
-    console.log(`Processing product submission for user ${userId}`);
-
-    // Check user's product limit - CORRECTED INCLUDE STATEMENT
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      include: {
-        products: {
-          where: {
-            status: "ACTIVE", // Only count active products
-          },
-        },
-      },
-    });
-
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    console.log(`User found: ${user.name}, plan_id: ${user.plan_id}`);
-
-    // Get user's plan based on plan_id
-    const activePlan = await prisma.plans.findUnique({
-      where: {
-        id: user.plan_id || 1, // Fallback to default plan
-      },
-    });
-
-    if (!activePlan) {
-      return res.status(400).json({ error: "No active plan found" });
-    }
-
-    console.log(
-      `Active plan: ${activePlan.name}, allowed products: ${activePlan.allowedProducts}`
-    );
-
-    const productLimit = activePlan.allowedProducts;
-    const currentProductCount = user.products.length;
-
-    console.log(
-      `Current product count: ${currentProductCount}, Limit: ${productLimit}`
-    );
-
-    if (currentProductCount >= productLimit) {
-      return res.status(403).json({
-        error: `Product limit reached. You can only create ${productLimit} product(s) with your ${activePlan.name}.`,
-        code: "PRODUCT_LIMIT_REACHED",
-        currentCount: currentProductCount,
-        limit: productLimit,
-      });
-    }
-
-    // Prepare data for Prisma
-    const product = await prisma.product.create({
-      data: {
-        ...otherData,
-        userId: userId,
-        price: parseFloat(price),
-        status: otherData.status || "PENDING",
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-      },
-    });
-
-    console.log(`Product created successfully: ${product.name}`);
-
-    res.json({
-      success: true,
-      product,
-      message: "Product submitted for approval",
-      limits: {
-        current: currentProductCount + 1,
-        limit: productLimit,
-        remaining: productLimit - (currentProductCount + 1),
-      },
-    });
-  } catch (error) {
-    console.error("Error creating product:", error);
-    res.status(400).json({
-      error: error.message || "Failed to create product",
-    });
-  }
-});
-
-// --- Product Listing API ---
-app.get("/api/products", async (req, res) => {
-  try {
-    const products = await prisma.product.findMany({
-      where: { status: "APPROVED" },
-    });
-
-    // 🌟 CHANGE: Process the image field for the client 🌟
-    const processedProducts = products.map(processProductData);
-
-    res.json(processedProducts);
-  } catch (error) {
-    console.error("Error fetching products:", error);
-    res.status(400).json({ error: error.message });
-  }
-});
 
 // Get all products (for admin)
 app.get("/api/admin/products", async (req, res) => {
