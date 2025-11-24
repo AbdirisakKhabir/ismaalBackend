@@ -825,8 +825,6 @@ app.post("/api/products", async (req, res) => {
 
     const { userId, price, ...otherData } = req.body;
 
-    console.log(`Processing product submission for user ${userId}`);
-
     // CORRECTED: Get user WITHOUT any plan include
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -843,8 +841,6 @@ app.post("/api/products", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    console.log(`User found: ${user.name}, plan_id: ${user.plan_id}`);
-
     // CORRECTED: Get plan separately using user.plan_id
     const activePlan = await prisma.plans.findUnique({
       where: {
@@ -856,16 +852,8 @@ app.post("/api/products", async (req, res) => {
       return res.status(400).json({ error: "No active plan found" });
     }
 
-    console.log(
-      `Active plan: ${activePlan.name}, allowed products: ${activePlan.allowedProducts}`
-    );
-
     const productLimit = activePlan.allowedProducts;
     const currentProductCount = user.products.length;
-
-    console.log(
-      `Current product count: ${currentProductCount}, Limit: ${productLimit}`
-    );
 
     if (currentProductCount >= productLimit) {
       return res.status(403).json({
@@ -899,14 +887,12 @@ app.post("/api/products", async (req, res) => {
   }
 });
 
-// --- Product Listing API ---
 app.get("/api/products", async (req, res) => {
   try {
     const products = await prisma.product.findMany({
       where: { status: "APPROVED" },
     });
 
-    // 🌟 CHANGE: Process the image field for the client 🌟
     const processedProducts = products.map(processProductData);
 
     res.json(processedProducts);
@@ -1478,7 +1464,6 @@ app.put("/api/products/:id/reject", async (req, res) => {
   }
 });
 
-// ✅ Place this ABOVE "/api/professionals/:id"
 app.get("/api/professionals/approved", async (req, res) => {
   try {
     const approvedProfessionals = await prisma.professional.findMany({
@@ -1516,7 +1501,6 @@ app.get("/api/professionals/approved", async (req, res) => {
   }
 });
 
-// ✅ Then this goes AFTER
 app.get("/api/professionals/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
