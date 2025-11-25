@@ -902,7 +902,7 @@ app.get("/api/products", async (req, res) => {
   }
 });
 
-app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
+app.patch("/api/businesses/:id", async (req, res) => {
   const currentUserId = req.userId;
   const businessId = req.params.id;
 
