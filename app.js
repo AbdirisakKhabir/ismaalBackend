@@ -902,93 +902,141 @@ app.get("/api/products", async (req, res) => {
   }
 });
 
-app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
+app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
   const currentUserId = req.userId;
-  const productId = parseInt(req.params.id, 10);
+  const businessId = req.params.id;
 
-  const { name, description, price, category, location } = req.body;
+  // Destructure fields from request body
+  const { name, description, category, phone, email, images, location } =
+    req.body;
 
-  if (!productId) {
-    return res.status(400).json({ error: "Product ID is required." });
+  // Validate business ID
+  if (!businessId) {
+    return res.status(400).json({ error: "Business ID is required." });
   }
 
-  if (!name && !description && !price && !category && !location) {
-    return res.status(400).json({ error: "No fields provided for update." });
+  // Validate business ID format (if using UUID)
+  if (!businessId.match(/^[0-9a-f-]+$/)) {
+    return res.status(400).json({ error: "Invalid business ID format." });
   }
 
-  // Client-side validation check
-  const validationError = validateUpdateData(req.body);
-  if (validationError) {
-    return res.status(400).json({ error: validationError });
+  // Check if at least one field is provided for update
+  const providedFields = {
+    name,
+    description,
+    category,
+    phone,
+    email,
+    images,
+    location,
+  };
+
+  const hasProvidedFields = Object.values(providedFields).some(
+    (val) => val !== undefined && val !== null && val !== ""
+  );
+
+  if (!hasProvidedFields) {
+    return res
+      .status(400)
+      .json({ error: "No valid fields provided for update." });
   }
 
-  let parsedPrice;
-  if (price !== undefined) {
-    parsedPrice = parseFloat(price);
+  // Validate required fields if they are provided
+  if (name !== undefined && (!name || name.trim() === "")) {
+    return res.status(400).json({ error: "Business name cannot be empty." });
+  }
+
+  if (email !== undefined && email) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res
+        .status(400)
+        .json({ error: "Please provide a valid email address." });
+    }
   }
 
   try {
-    // 1. Verify existence and ownership
-    const existingProduct = await prisma.product.findUnique({
-      where: { id: productId },
-      select: { userId: true },
+    // 1. Verify business exists and check ownership
+    const existingBusiness = await prisma.business.findUnique({
+      where: { id: businessId },
+      select: {
+        ownerId: true,
+        name: true, // Include name for better error messages
+      },
     });
 
-    if (!existingProduct) {
-      return res.status(404).json({ error: "Product listing not found." });
+    if (!existingBusiness) {
+      return res.status(404).json({ error: "Business listing not found." });
     }
 
-    // Authorization check
-    if (existingProduct.userId !== currentUserId) {
-      return res
-        .status(403)
-        .json({ error: "Forbidden: You do not own this product listing." });
-    }
-
-    // Prepare update data dynamically
-    const dataToUpdate = {
-      ...(name && { name }),
-      ...(description && { description }),
-      ...(price !== undefined && { price: parsedPrice }),
-      ...(category && { category }),
-      ...(location && { location }),
-      status: "PENDING",
-      updatedAt: new Date(),
-    };
-
-    console.log("[Product Update] Data to be saved:", dataToUpdate);
-
-    // 2. Perform the update
-    const updatedProduct = await prisma.product.update({
-      where: { id: productId },
-      data: dataToUpdate,
-    });
-
-    res.status(200).json({
-      message: "Product updated successfully and reset to PENDING review.",
-      product: updatedProduct,
-    });
-  } catch (error) {
-    console.error("Error updating product:", error);
-
-    if (error.code === "P2025") {
-      // P2025: Record to update not found
-      return res
-        .status(404)
-        .json({ error: "The product was not found or has been deleted." });
-    }
-    if (error.code === "P2003") {
-      // P2003: Foreign key constraint failed (e.g., trying to link to a non-existent category/location)
-      return res.status(400).json({
-        error:
-          "Invalid data provided. Category or location data may be unrecognized.",
+    // Security check: only the owner can update the business
+    if (existingBusiness.ownerId !== currentUserId) {
+      return res.status(403).json({
+        error: "Forbidden: You do not own this business listing.",
       });
     }
 
-    // Default generic error
+    // Prepare update data dynamically - allow empty strings but not undefined
+    const dataToUpdate = {
+      ...(name !== undefined && { name: name.trim() }),
+      ...(description !== undefined && { description }),
+      ...(category !== undefined && { category }),
+      ...(phone !== undefined && { phone }),
+      ...(email !== undefined && { email }),
+      ...(images !== undefined && { images }),
+      ...(location !== undefined && { location }),
+      // Mandatory for any update: reset status and update timestamp
+      status: "APPROVED",
+      updatedAt: new Date(),
+    };
+
+    // 2. Perform the update
+    const updatedBusiness = await prisma.business.update({
+      where: { id: businessId },
+      data: dataToUpdate,
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        category: true,
+        phone: true,
+        email: true,
+        status: true,
+        updatedAt: true,
+      },
+    });
+
+    console.log(`Business ${businessId} updated by user ${currentUserId}`);
+
+    res.status(200).json({
+      message: "Business updated successfully and reset to PENDING review.",
+      business: updatedBusiness,
+    });
+  } catch (error) {
+    console.error("Error updating business:", error);
+
+    // Handle specific Prisma errors
+    if (error.code === "P2025") {
+      return res
+        .status(404)
+        .json({ error: "Business not found or already deleted." });
+    }
+
+    if (error.code === "P2002") {
+      return res
+        .status(409)
+        .json({ error: "A business with this name or email already exists." });
+    }
+
+    // Handle validation errors
+    if (error instanceof Prisma.PrismaClientValidationError) {
+      return res
+        .status(400)
+        .json({ error: "Invalid data provided for update." });
+    }
+
     res.status(500).json({
-      error:
-        "Failed to update product listing due to an internal server issue. Please try again or contact support.",
+      error: "Failed to update business listing. Please try again later.",
     });
   }
 });
