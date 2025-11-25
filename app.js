@@ -2021,6 +2021,9 @@ app.get("/api/users/:userId/businesses", async (req, res) => {
       select: {
         id: true,
         name: true,
+        email: true,
+        phone: true,
+        location: true,
         description: true,
         status: true,
         category: true,
