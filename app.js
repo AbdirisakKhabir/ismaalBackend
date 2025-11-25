@@ -902,26 +902,27 @@ app.get("/api/products", async (req, res) => {
   }
 });
 
-app.patch("/api/businesses/:id", async (req, res) => {
+app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
   const currentUserId = req.userId;
   const businessId = req.params.id;
 
-  // Destructure fields from request body
-  const { name, description, category, phone, email, images, location } =
-    req.body;
+  console.log("=== BACKEND DEBUG: Business Update Request ===");
+  console.log("Business ID from params:", businessId);
+  console.log("Current User ID from header:", currentUserId);
+  console.log("Request Body:", req.body);
+  console.log("Request Headers - x-user-id:", req.headers["x-user-id"]);
 
-  // Validate business ID
   if (!businessId) {
+    console.log("❌ Missing business ID");
     return res.status(400).json({ error: "Business ID is required." });
   }
 
-  // Validate business ID format (if using UUID)
-  if (!businessId.match(/^[0-9a-f-]+$/)) {
-    return res.status(400).json({ error: "Invalid business ID format." });
-  }
+  // Destructure ONLY the allowed fields
+  const { name, description, category, phone, email, images, location } =
+    req.body;
 
-  // Check if at least one field is provided for update
-  const providedFields = {
+  // Check if at least one allowed field is provided
+  const hasProvidedFields = [
     name,
     description,
     category,
@@ -929,54 +930,46 @@ app.patch("/api/businesses/:id", async (req, res) => {
     email,
     images,
     location,
-  };
-
-  const hasProvidedFields = Object.values(providedFields).some(
-    (val) => val !== undefined && val !== null && val !== ""
-  );
+  ].some((field) => field !== undefined && field !== null && field !== "");
 
   if (!hasProvidedFields) {
+    console.log("❌ No valid fields provided");
     return res
       .status(400)
       .json({ error: "No valid fields provided for update." });
   }
 
-  // Validate required fields if they are provided
-  if (name !== undefined && (!name || name.trim() === "")) {
-    return res.status(400).json({ error: "Business name cannot be empty." });
-  }
-
-  if (email !== undefined && email) {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res
-        .status(400)
-        .json({ error: "Please provide a valid email address." });
-    }
-  }
-
   try {
-    // 1. Verify business exists and check ownership
+    console.log("🔍 Looking up business in database...");
+
+    // Verify business exists and check ownership
     const existingBusiness = await prisma.business.findUnique({
       where: { id: businessId },
       select: {
         ownerId: true,
-        name: true, // Include name for better error messages
+        name: true,
       },
     });
 
+    console.log("Found business:", existingBusiness);
+
     if (!existingBusiness) {
+      console.log("❌ Business not found in database");
       return res.status(404).json({ error: "Business listing not found." });
     }
 
-    // Security check: only the owner can update the business
+    console.log("Business Owner ID:", existingBusiness.ownerId);
+    console.log("Current User ID:", currentUserId);
+    console.log("Ownership Match:", existingBusiness.ownerId === currentUserId);
+
     if (existingBusiness.ownerId !== currentUserId) {
+      console.log("❌ Ownership mismatch - User doesn't own this business");
       return res.status(403).json({
         error: "Forbidden: You do not own this business listing.",
       });
     }
 
-    // Prepare update data dynamically - allow empty strings but not undefined
+    // Prepare update data - only include provided fields
     const dataToUpdate = {
       ...(name !== undefined && { name: name.trim() }),
       ...(description !== undefined && { description }),
@@ -985,58 +978,71 @@ app.patch("/api/businesses/:id", async (req, res) => {
       ...(email !== undefined && { email }),
       ...(images !== undefined && { images }),
       ...(location !== undefined && { location }),
-      // Mandatory for any update: reset status and update timestamp
-      status: "APPROVED",
+      status: "PENDING",
       updatedAt: new Date(),
     };
 
-    // 2. Perform the update
+    console.log("📝 Data to update:", dataToUpdate);
+
+    // Perform the update
+    console.log("🚀 Attempting database update...");
     const updatedBusiness = await prisma.business.update({
       where: { id: businessId },
       data: dataToUpdate,
-      select: {
-        id: true,
-        name: true,
-        description: true,
-        category: true,
-        phone: true,
-        email: true,
-        status: true,
-        updatedAt: true,
-      },
     });
 
-    console.log(`Business ${businessId} updated by user ${currentUserId}`);
+    console.log("✅ Update successful for business:", businessId);
+    console.log("Updated business:", updatedBusiness);
 
     res.status(200).json({
       message: "Business updated successfully and reset to PENDING review.",
       business: updatedBusiness,
     });
   } catch (error) {
-    console.error("Error updating business:", error);
+    console.error("❌ PRISMA ERROR DETAILS:");
+    console.error("Error name:", error.name);
+    console.error("Error code:", error.code);
+    console.error("Error message:", error.message);
+    console.error("Error meta:", error.meta);
 
     // Handle specific Prisma errors
     if (error.code === "P2025") {
-      return res
-        .status(404)
-        .json({ error: "Business not found or already deleted." });
+      console.log("❌ Record not found in database");
+      return res.status(404).json({ error: "Business not found." });
     }
 
     if (error.code === "P2002") {
+      console.log("❌ Unique constraint violation");
       return res
         .status(409)
         .json({ error: "A business with this name or email already exists." });
     }
 
-    // Handle validation errors
-    if (error instanceof Prisma.PrismaClientValidationError) {
+    if (error.code === "P2003") {
+      console.log("❌ Foreign key constraint failed");
       return res
         .status(400)
-        .json({ error: "Invalid data provided for update." });
+        .json({ error: "Invalid reference in update data." });
     }
 
+    if (error.code === "P2016") {
+      console.log("❌ Query interpretation error");
+      return res.status(400).json({ error: "Invalid query parameters." });
+    }
+
+    // Handle validation errors
+    if (error instanceof Prisma.PrismaClientValidationError) {
+      console.log("❌ Prisma validation error");
+      return res.status(400).json({
+        error: "Invalid data provided for update. Please check field types.",
+      });
+    }
+
+    console.error("❌ UNHANDLED ERROR - Full error object:");
+    console.error(error);
+
     res.status(500).json({
-      error: "Failed to update business listing. Please try again later.",
+      error: `Failed to update business listing: ${error.message}`,
     });
   }
 });
