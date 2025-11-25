@@ -903,166 +903,126 @@ app.get("/api/products", async (req, res) => {
 });
 
 app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
-  const currentUserId = req.userId;
-  const businessId = req.params.id;
-
-  console.log("=== BACKEND DEBUG: Business Update Request ===");
-  console.log(
-    "Business ID from params:",
-    businessId,
-    "Type:",
-    typeof businessId
-  );
-  console.log(
-    "Current User ID from header:",
-    currentUserId,
-    "Type:",
-    typeof currentUserId
-  );
-  console.log("Request Body:", req.body);
-
-  if (!businessId) {
-    return res.status(400).json({ error: "Business ID is required." });
-  }
-
-  // Destructure ONLY the allowed fields
-  const { name, description, category, phone, email, images, location } =
-    req.body;
-
   try {
-    console.log("🔍 Looking up business in database...");
+    const currentUserId = req.userId; // This comes as string "6" from header
+    const businessId = req.params.id; // This comes as string "8" from URL
 
-    // Convert businessId to number if needed (check your Prisma schema)
-    const businessIdNum = parseInt(businessId);
-
-    // Verify business exists and check ownership
-    const existingBusiness = await prisma.business.findUnique({
-      where: { id: businessIdNum }, // Try with parsed number
-      select: {
-        ownerId: true,
-        name: true,
-      },
-    });
-
-    // If not found with number, try with string
-    if (!existingBusiness) {
-      console.log("⚠️  Business not found with number ID, trying string...");
-      const existingBusinessStr = await prisma.business.findUnique({
-        where: { id: businessId }, // Try with original string
-        select: {
-          ownerId: true,
-          name: true,
-        },
-      });
-
-      if (existingBusinessStr) {
-        console.log("✅ Found business with string ID");
-        var finalBusiness = existingBusinessStr;
-      } else {
-        console.log("❌ Business not found with either ID type");
-        return res.status(404).json({ error: "Business listing not found." });
-      }
-    } else {
-      console.log("✅ Found business with number ID");
-      var finalBusiness = existingBusiness;
-    }
-
-    console.log("Business details:", finalBusiness);
+    console.log("=== UPDATE ATTEMPT ===");
     console.log(
-      "Business Owner ID:",
-      finalBusiness.ownerId,
-      "Type:",
-      typeof finalBusiness.ownerId
-    );
-    console.log(
-      "Current User ID:",
+      "User ID from header:",
       currentUserId,
       "Type:",
       typeof currentUserId
     );
+    console.log(
+      "Business ID from URL:",
+      businessId,
+      "Type:",
+      typeof businessId
+    );
+    console.log("Update data:", req.body);
 
-    // Convert both IDs to string for comparison to handle number/string mismatch
-    const businessOwnerId = finalBusiness.ownerId.toString();
-    const requestingUserId = currentUserId.toString();
+    const { name, description, category, phone, email, location } = req.body;
 
-    console.log("Ownership Match:", businessOwnerId === requestingUserId);
+    // Convert IDs to numbers to match Prisma schema
+    const currentUserIdNum = parseInt(currentUserId);
+    const businessIdNum = parseInt(businessId);
 
-    if (businessOwnerId !== requestingUserId) {
-      console.log("❌ Ownership mismatch");
-      return res.status(403).json({
-        error: "Forbidden: You do not own this business listing.",
-      });
+    console.log(
+      "Converted User ID:",
+      currentUserIdNum,
+      "Type:",
+      typeof currentUserIdNum
+    );
+    console.log(
+      "Converted Business ID:",
+      businessIdNum,
+      "Type:",
+      typeof businessIdNum
+    );
+
+    if (isNaN(currentUserIdNum) || isNaN(businessIdNum)) {
+      return res.status(400).json({ error: "Invalid ID format" });
     }
 
-    // Prepare update data
-    const dataToUpdate = {
-      ...(name !== undefined && { name: name.trim() }),
-      ...(description !== undefined && { description }),
-      ...(category !== undefined && { category }),
-      ...(phone !== undefined && { phone }),
-      ...(email !== undefined && { email }),
-      ...(images !== undefined && { images }),
-      ...(location !== undefined && { location }),
-      status: "PENDING",
+    // 1. Find the business first
+    const business = await prisma.business.findUnique({
+      where: { id: businessIdNum },
+    });
+
+    if (!business) {
+      console.log("❌ Business not found with ID:", businessIdNum);
+      return res.status(404).json({ error: "Business not found" });
+    }
+
+    console.log("Found business:", {
+      id: business.id,
+      ownerId: business.ownerId,
+      name: business.name,
+    });
+
+    // 2. Check ownership (compare numbers)
+    if (business.ownerId !== currentUserIdNum) {
+      console.log("❌ Ownership mismatch:", {
+        businessOwner: business.ownerId,
+        currentUser: currentUserIdNum,
+      });
+      return res
+        .status(403)
+        .json({ error: "Not authorized to update this business" });
+    }
+
+    console.log("✅ Ownership verified - user owns this business");
+
+    // 3. Prepare update data
+    const updateData = {
+      name: name || business.name,
+      description: description || business.description,
+      category: category || business.category,
+      phone: phone || business.phone,
+      email: email || business.email,
+      location: location || business.location,
+      status: "PENDING", // Reset to pending for admin review
       updatedAt: new Date(),
     };
 
-    console.log("📝 Data to update:", dataToUpdate);
+    console.log("📝 Final update data:", updateData);
 
-    // Try update with different ID types
-    console.log("🚀 Attempting database update...");
-    let updatedBusiness;
+    // 4. Perform update
+    const result = await prisma.business.update({
+      where: { id: businessIdNum },
+      data: updateData,
+    });
 
-    try {
-      // First try with number ID
-      updatedBusiness = await prisma.business.update({
-        where: { id: businessIdNum },
-        data: dataToUpdate,
-      });
-      console.log("✅ Update successful with number ID");
-    } catch (updateError) {
-      console.log("⚠️  Update with number failed, trying with string ID...");
-      // If number fails, try with string ID
-      updatedBusiness = await prisma.business.update({
-        where: { id: businessId },
-        data: dataToUpdate,
-      });
-      console.log("✅ Update successful with string ID");
-    }
+    console.log("✅ Update successful:", {
+      id: result.id,
+      name: result.name,
+      status: result.status,
+    });
 
-    console.log("Updated business:", updatedBusiness);
-
-    res.status(200).json({
-      message: "Business updated successfully and reset to PENDING review.",
-      business: updatedBusiness,
+    res.json({
+      message: "Business updated successfully and set to PENDING for review",
+      business: result,
     });
   } catch (error) {
-    console.error("❌ DETAILED ERROR:");
+    console.error("❌ UPDATE ERROR DETAILS:");
     console.error("Error name:", error.name);
     console.error("Error code:", error.code);
     console.error("Error message:", error.message);
-    console.error("Error stack:", error.stack);
 
     if (error.code === "P2025") {
-      return res.status(404).json({ error: "Business not found." });
+      return res.status(404).json({ error: "Business not found" });
     }
 
     if (error.code === "P2002") {
-      const target = error.meta?.target || [];
-      return res.status(409).json({
-        error: `A business with this ${target.join(", ")} already exists.`,
-      });
-    }
-
-    if (error.code === "P2003") {
       return res
-        .status(400)
-        .json({ error: "Invalid reference in update data." });
+        .status(409)
+        .json({ error: "A business with this name or email already exists" });
     }
 
-    // Send the actual error message to frontend for debugging
+    // Return the actual error message for debugging
     res.status(500).json({
-      error: `Server error: ${error.message}`,
+      error: `Update failed: ${error.message}`,
     });
   }
 });
