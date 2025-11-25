@@ -945,6 +945,126 @@ app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
   }
 });
 
+// Backend endpoint for PATCH /api/products/:id
+app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
+  try {
+    const currentUserId = req.userId;
+    const productId = req.params.id;
+
+    console.log("=== PRODUCT UPDATE ATTEMPT ===");
+    console.log(
+      "User ID from header:",
+      currentUserId,
+      "Type:",
+      typeof currentUserId
+    );
+    console.log("Product ID from URL:", productId, "Type:", typeof productId);
+    console.log("Update data:", req.body);
+
+    const { name, description, price, category, location } = req.body;
+
+    // Convert IDs to numbers to match Prisma schema
+    const currentUserIdNum = parseInt(currentUserId);
+    const productIdNum = parseInt(productId);
+
+    console.log(
+      "Converted User ID:",
+      currentUserIdNum,
+      "Type:",
+      typeof currentUserIdNum
+    );
+    console.log(
+      "Converted Product ID:",
+      productIdNum,
+      "Type:",
+      typeof productIdNum
+    );
+
+    if (isNaN(currentUserIdNum) || isNaN(productIdNum)) {
+      return res.status(400).json({ error: "Invalid ID format" });
+    }
+
+    // 1. Find the product first
+    const existingProduct = await prisma.product.findUnique({
+      where: { id: productIdNum },
+    });
+
+    if (!existingProduct) {
+      console.log("❌ Product not found with ID:", productIdNum);
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    console.log("Found product:", {
+      id: existingProduct.id,
+      userId: existingProduct.userId,
+      name: existingProduct.name,
+    });
+
+    // 2. Check ownership (compare numbers)
+    if (existingProduct.userId !== currentUserIdNum) {
+      console.log("❌ Ownership mismatch:", {
+        productOwner: existingProduct.userId,
+        currentUser: currentUserIdNum,
+      });
+      return res
+        .status(403)
+        .json({ error: "Not authorized to update this product" });
+    }
+
+    console.log("✅ Ownership verified - user owns this product");
+
+    // 3. Prepare update data
+    const updateData = {
+      name: name || existingProduct.name,
+      description: description || existingProduct.description,
+      price: price || existingProduct.price,
+      category: category || existingProduct.category,
+      location: location || existingProduct.location,
+      status: "PENDING", // Reset to pending for admin review
+      updatedAt: new Date(),
+    };
+
+    console.log("📝 Final update data:", updateData);
+
+    // 4. Perform update
+    const result = await prisma.product.update({
+      where: { id: productIdNum },
+      data: updateData,
+    });
+
+    console.log("✅ Product update successful:", {
+      id: result.id,
+      name: result.name,
+      status: result.status,
+    });
+
+    res.json({
+      message: "Product updated successfully and set to PENDING for review",
+      product: result,
+    });
+  } catch (error) {
+    console.error("❌ PRODUCT UPDATE ERROR DETAILS:");
+    console.error("Error name:", error.name);
+    console.error("Error code:", error.code);
+    console.error("Error message:", error.message);
+
+    if (error.code === "P2025") {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    if (error.code === "P2002") {
+      return res
+        .status(409)
+        .json({ error: "A product with this name already exists" });
+    }
+
+    // Return the actual error message for debugging
+    res.status(500).json({
+      error: `Product update failed: ${error.message}`,
+    });
+  }
+});
+
 // Get all businesses (for admin)
 app.get("/api/admin/businesses", async (req, res) => {
   try {
