@@ -316,48 +316,103 @@ const validateUpdateData = (data) => {
 };
 
 // --- 🌟 UPDATED UPDATE USER API ROUTE 🌟 ---
-app.patch("/api/users/:id", async (req, res) => {
-  const userIdToUpdate = parseInt(req.params.id, 10);
-  const updateData = req.body;
-
-  // 1. Basic Validation
-  if (isNaN(userIdToUpdate)) {
-    return res.status(400).json({ error: "Invalid User ID provided." });
-  }
-
-  const validationError = validateUpdateUserData(updateData);
-  if (validationError) {
-    return res.status(400).json({ error: validationError });
-  }
-
+// Backend endpoint for PATCH /api/users/:id
+app.patch("/api/users/:id", isAuthenticated, async (req, res) => {
   try {
-    // 3. Prepare data for Prisma
-    const dataToUpdate = {};
+    const currentUserId = req.userId;
+    const userIdToUpdate = req.params.id;
 
-    // Copy simple fields if they exist
-    if (updateData.name !== undefined) dataToUpdate.name = updateData.name;
-    if (updateData.email !== undefined) dataToUpdate.email = updateData.email;
-    if (updateData.phone !== undefined) dataToUpdate.phone = updateData.phone;
-    if (updateData.location !== undefined)
-      dataToUpdate.location = updateData.location;
+    console.log("=== PROFILE UPDATE ATTEMPT ===");
+    console.log(
+      "Current User ID from header:",
+      currentUserId,
+      "Type:",
+      typeof currentUserId
+    );
+    console.log(
+      "Target User ID from URL:",
+      userIdToUpdate,
+      "Type:",
+      typeof userIdToUpdate
+    );
+    console.log("Update data:", req.body);
 
-    // 🌟 CHANGE: Handle Password Hashing 🌟
-    if (updateData.password !== undefined) {
-      const hashedPassword = await bcrypt.hash(updateData.password, 10);
-      dataToUpdate.password = hashedPassword;
+    const { name, email, phone, location, password } = req.body;
+
+    // Convert IDs to numbers to match Prisma schema
+    const currentUserIdNum = parseInt(currentUserId);
+    const userIdToUpdateNum = parseInt(userIdToUpdate);
+
+    console.log(
+      "Converted Current User ID:",
+      currentUserIdNum,
+      "Type:",
+      typeof currentUserIdNum
+    );
+    console.log(
+      "Converted Target User ID:",
+      userIdToUpdateNum,
+      "Type:",
+      typeof userIdToUpdateNum
+    );
+
+    if (isNaN(currentUserIdNum) || isNaN(userIdToUpdateNum)) {
+      return res.status(400).json({ error: "Invalid ID format" });
     }
 
-    if (Object.keys(dataToUpdate).length === 0) {
+    // Security check: users can only update their own profile
+    if (currentUserIdNum !== userIdToUpdateNum) {
+      console.log("❌ Authorization mismatch:", {
+        currentUser: currentUserIdNum,
+        targetUser: userIdToUpdateNum,
+      });
       return res
-        .status(400)
-        .json({ error: "No valid fields provided for update." });
+        .status(403)
+        .json({ error: "Not authorized to update this profile" });
     }
 
-    // 4. Update the user in the database
-    const updatedUser = await prisma.user.update({
-      where: { id: userIdToUpdate },
-      data: dataToUpdate,
-      // Select fields to return to the client (EXCLUDE PASSWORD)
+    console.log(
+      "✅ Authorization verified - user can update their own profile"
+    );
+
+    // 1. Find the user first
+    const existingUser = await prisma.user.findUnique({
+      where: { id: userIdToUpdateNum },
+    });
+
+    if (!existingUser) {
+      console.log("❌ User not found with ID:", userIdToUpdateNum);
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    console.log("Found user:", {
+      id: existingUser.id,
+      email: existingUser.email,
+      name: existingUser.name,
+    });
+
+    // 2. Prepare update data
+    const updateData = {
+      ...(name !== undefined && { name }),
+      ...(email !== undefined && { email }),
+      ...(phone !== undefined && { phone }),
+      ...(location !== undefined && { location }),
+      updatedAt: new Date(),
+    };
+
+    // Handle password hashing if provided
+    if (password) {
+      console.log("🔐 Password update requested");
+      const hashedPassword = await bcrypt.hash(password, 10);
+      updateData.password = hashedPassword;
+    }
+
+    console.log("📝 Final update data:", Object.keys(updateData));
+
+    // 3. Perform update
+    const result = await prisma.user.update({
+      where: { id: userIdToUpdateNum },
+      data: updateData,
       select: {
         id: true,
         email: true,
@@ -371,21 +426,36 @@ app.patch("/api/users/:id", async (req, res) => {
       },
     });
 
-    // 5. Success Response
-    res.json(updatedUser);
-  } catch (error) {
-    console.error("Error updating user profile:", error);
+    console.log("✅ Profile update successful:", {
+      id: result.id,
+      email: result.email,
+      name: result.name,
+    });
 
-    // 6. Handle unique constraint error (e.g., email already exists)
-    if (error.code === "P2002" && error.meta?.target?.includes("email")) {
-      return res.status(409).json({
-        error: "This email is already registered to another account.",
-      });
+    res.json(result);
+  } catch (error) {
+    console.error("❌ PROFILE UPDATE ERROR DETAILS:");
+    console.error("Error name:", error.name);
+    console.error("Error code:", error.code);
+    console.error("Error message:", error.message);
+
+    if (error.code === "P2025") {
+      return res.status(404).json({ error: "User not found" });
     }
 
-    res
-      .status(500)
-      .json({ error: "Failed to update profile due to a server error." });
+    if (error.code === "P2002") {
+      // Unique constraint violation (email)
+      if (error.meta?.target?.includes("email")) {
+        return res.status(409).json({
+          error: "This email is already registered to another account.",
+        });
+      }
+    }
+
+    // Return the actual error message for debugging
+    res.status(500).json({
+      error: `Profile update failed: ${error.message}`,
+    });
   }
 });
 
