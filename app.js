@@ -22,24 +22,38 @@ const upload = multer({ storage: multer.memoryStorage() });
 app.use(cors());
 app.use(express.json());
 
-// Authentication routes
 app.post("/api/auth/register", async (req, res) => {
   try {
     const { email, password, name } = req.body;
     if (!email || !password || !name) {
       return res.status(400).json({ error: "All fields are required" });
     }
+
+    // 1. Check for existing user
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
       return res.status(400).json({ error: "Email already registered" });
     }
+
+    // 2. Hash the password
     const hashedPassword = await bcrypt.hash(password, 10);
+
+    // 3. Create the user. The 'status' field will automatically be set to 'PENDING'
+    // because of the @default(PENDING) annotation in the Prisma schema.
     const user = await prisma.user.create({
-      data: { email, password: hashedPassword, name },
+      data: {
+        email,
+        password: hashedPassword,
+        name,
+        // No need to explicitly set status, Prisma handles the default
+      },
     });
+
+    // 4. Send response (excluding the password)
     const { password: _, ...userWithoutPassword } = user;
     res.json(userWithoutPassword);
   } catch (error) {
+    console.error("Registration error:", error);
     res.status(400).json({ error: error.message });
   }
 });
@@ -249,6 +263,47 @@ app.post("/api/upload", upload.array("images"), async (req, res) => {
     console.error("Upload error:", error);
     res.status(500).json({
       error: error.message || "Failed to upload images to Cloudinary",
+    });
+  }
+});
+
+// Backend: Single Image Upload API (POST /api/upload/single)
+
+// Multer now uses upload.single() and expects a field named "image"
+app.post("/api/upload/single", upload.single("image"), async (req, res) => {
+  console.log("[UPLOAD] Receiving single file for Cloudinary...");
+
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No image file provided" });
+    }
+
+    // Log file details for debugging
+    console.log(`[UPLOAD] File:`, {
+      originalname: req.file.originalname,
+      size: req.file.size,
+    });
+
+    // Convert buffer to base64 Data URI
+    const b64 = Buffer.from(req.file.buffer).toString("base64");
+    const dataURI = "data:" + req.file.mimetype + ";base64," + b64;
+
+    const result = await cloudinary.uploader.upload(dataURI, {
+      folder: "caafiCare",
+      resource_type: "auto",
+    });
+
+    console.log(`[UPLOAD] Cloudinary success: 1 file uploaded.`);
+
+    // Return a single object, not an array
+    res.json({
+      imageUrl: result.secure_url,
+      publicId: result.public_id,
+    });
+  } catch (error) {
+    console.error("Single Upload error:", error);
+    res.status(500).json({
+      error: error.message || "Failed to upload image to Cloudinary",
     });
   }
 });
@@ -1462,24 +1517,49 @@ app.get("/api/businesses/:id", async (req, res) => {
   }
 });
 
-// Get business products
-app.get("/api/businesses/:id/products", async (req, res) => {
+app.get("/api/entity/:type/:id/products", async (req, res) => {
   try {
-    const { id } = req.params;
+    const { id, type } = req.params;
+    let ownerId;
+    let entityName;
 
-    // First get the business to find the owner
-    const business = await prisma.business.findUnique({
-      where: { id: parseInt(id) },
-    });
+    // 1. Determine the ownerId based on the entity type
+    if (type === "business") {
+      const business = await prisma.business.findUnique({
+        where: { id: parseInt(id) },
+      });
 
-    if (!business) {
-      return res.status(404).json({ error: "Business not found" });
+      if (!business) {
+        return res.status(404).json({ error: "Business not found" });
+      }
+      ownerId = business.ownerId; // Assuming Business has ownerId
+      entityName = business.name;
+    } else if (type === "professional") {
+      const professional = await prisma.professional.findUnique({
+        where: { id: parseInt(id) },
+      });
+
+      if (!professional) {
+        return res.status(404).json({ error: "Professional not found" });
+      }
+      ownerId = professional.userId; // Assuming Professional has userId (the owner)
+      entityName = professional.specialty; // Use specialty or profession as the name
+    } else {
+      return res.status(400).json({ error: "Invalid entity type specified" });
     }
 
-    // Get products by the business owner
+    // Check if ownerId was successfully found
+    if (!ownerId) {
+      console.error(`[PRODUCTS] Owner ID not found for ${type} ${id}`);
+      return res
+        .status(404)
+        .json({ error: `Owner not linked to this ${type}` });
+    }
+
+    // 2. Get products by the entity owner
     const products = await prisma.product.findMany({
       where: {
-        userId: business.ownerId,
+        userId: ownerId, // Fetch products linked to the owner's ID
         status: "APPROVED", // Only show approved products
       },
       orderBy: {
@@ -1487,10 +1567,13 @@ app.get("/api/businesses/:id/products", async (req, res) => {
       },
     });
 
+    console.log(
+      `[PRODUCTS] Found ${products.length} products for ${entityName} (${type} ${id})`
+    );
     res.json(products);
   } catch (error) {
-    console.error("Error fetching business products:", error);
-    res.status(500).json({ error: "Failed to fetch business products" });
+    console.error("Error fetching entity products:", error);
+    res.status(500).json({ error: "Failed to fetch entity products" });
   }
 });
 
@@ -1608,8 +1691,8 @@ app.put("/api/products/:id/reject", async (req, res) => {
 
 app.get("/api/professionals/approved", async (req, res) => {
   try {
-    const approvedProfessionals = await prisma.professional.findMany({
-      where: { status: "APPROVED" },
+    const approvedProfessionals = await prisma.user.findMany({
+      where: { status: "ACTIVE" },
       include: {
         user: { select: { id: true, name: true, email: true } },
       },
@@ -2158,6 +2241,104 @@ app.get("/api/users/:userId/businesses", async (req, res) => {
 
   try {
     const businesses = await prisma.business.findMany({
+      where: { ownerId: userId },
+      // Select fields to return to minimize data transfer
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        location: true,
+        description: true,
+        status: true,
+        category: true,
+        image: true,
+      },
+    });
+
+    // You might want to process the image field here if it's stored as a comma-separated string
+    const processedBusinesses = businesses.map((b) => ({
+      ...b,
+      image: b.image ? b.image.split(",")[0].trim() : null,
+    }));
+
+    res.json(processedBusinesses);
+  } catch (error) {
+    console.error("Error fetching user businesses:", error);
+    res.status(500).json({ error: "Failed to fetch user businesses." });
+  }
+});
+
+app.get("/api/professionals/approved", async (req, res) => {
+  try {
+    const approvedProfessionals = await prisma.professional.findMany({
+      // Assuming 'submittedDate' is a field on the Professional model
+      orderBy: { submittedDate: "desc" },
+    });
+
+    const formattedProfessionals = approvedProfessionals.map(
+      (professional) => ({
+        id: professional.id,
+        userId: professional.userId,
+        // Accessing the name/email from the included 'user' object
+        userName: professional.user.name,
+        userEmail: professional.user.email,
+        profession: professional.profession,
+        specialty: professional.specialty,
+        experience: professional.experience,
+        location: professional.location,
+        phone: professional.phone,
+        email: professional.email,
+        image: professional.image,
+        status: professional.status,
+        submittedDate: professional.submittedDate,
+        createdAt: professional.createdAt,
+        updatedAt: professional.updatedAt,
+      })
+    );
+
+    res.status(200).json(formattedProfessionals);
+  } catch (error) {
+    console.error("❌ Error fetching approved professionals:", error);
+    res.status(500).json({ error: "Failed to fetch approved professionals" });
+  }
+});
+
+// NEW ROUTE: Count the number of Professional profiles for a specific user
+app.get("/api/users/:userId/profiles/count", async (req, res) => {
+  const userId = parseInt(req.params.userId, 10);
+
+  if (isNaN(userId)) {
+    return res.status(400).json({ error: "Invalid User ID." });
+  }
+
+  // NOTE: Add Authorization check here
+
+  try {
+    // Use prisma.professional.count() to efficiently get the number of records
+    const profileCount = await prisma.professional.count({
+      where: { userId: userId },
+    });
+
+    // Return the count directly
+    res.json({ count: profileCount });
+  } catch (error) {
+    console.error("Error fetching user professional count:", error);
+    res.status(500).json({ error: "Failed to fetch user professional count." });
+  }
+});
+
+app.get("/api/users/:userId/profiles", async (req, res) => {
+  const userId = parseInt(req.params.userId, 10);
+
+  if (isNaN(userId)) {
+    return res.status(400).json({ error: "Invalid User ID." });
+  }
+
+  // NOTE: Add Authorization check here
+
+  try {
+    const businesses = await prisma.professional.findMany({
       where: { ownerId: userId },
       // Select fields to return to minimize data transfer
       select: {
