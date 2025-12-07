@@ -23,6 +23,7 @@ model User {
   products           Product[]
   professional       Professional?
   PlanUpgradeRequest PlanUpgradeRequest[]
+  transactions       Transaction[]
 }
 
 // NOTE: You will need to run 'npx prisma migrate dev' to apply these schema changes to your database.
@@ -49,8 +50,17 @@ model Product {
   id            Int      @id @default(autoincrement())
   name          String
   description   String   @db.Text
-  price         Decimal
-  category      String
+  // New Price Fields
+  price         Decimal // Base price / Price From
+  price_to      Decimal? // Price To (Used for Range)
+  price_option  String   @default("Fixed") // Fixed, Range, Negotiable, Crossed
+  crossed_price Decimal? // Original price (Used for Crossed)
+
+  // New Fields
+  category    String // Comma-separated categories
+  type        String @default("New") // New, Used, Refurbished
+  posted_from String @default("Personal") // Personal, Business_ID, Professional_ID
+
   image         String?  @db.Text
   status        Status   @default(PENDING)
   user          User     @relation(fields: [userId], references: [id])
@@ -112,6 +122,7 @@ model Plans {
   // Remove these duplicates:
   // PlanUpgradeRequest PlanUpgradeRequest[]
   // PlanUpgradeRequest PlanUpgradeRequest[]
+  transactions Transaction[]
 }
 
 model Professional {
@@ -143,4 +154,23 @@ enum Status {
   ACTIVE
   INACTIVE
   // ... other status values
+}
+
+model Transaction {
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  planId        Int
+  transactionId String   @unique
+  productId     String
+  amount        Float
+  status        String   @default("COMPLETED")
+  paymentMethod String   @default("APPLE_IAP")
+  purchaseDate  DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  // Relations
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan Plans @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@map("transactions")
 }

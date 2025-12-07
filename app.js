@@ -825,26 +825,65 @@ app.post("/api/businesses", async (req, res) => {
   }
 });
 
-// Enhanced product creation with plan validation
-// NOTE: This server-side validator is now integrated based on your request.
 const validateProductData = (data) => {
-  // 🌟 MODIFIED REQUIRED FIELDS: Added 'image' (for the URL string) 🌟
-  const required = [
-    "name",
-    "description",
-    "price",
-    "category",
-    "userId",
-    "location",
-    "image", // Ensure the comma-separated URL string is present
-  ];
-  for (const field of required) {
-    if (!data[field]) return `${field} is required`;
+  const errors = {};
+
+  if (!data.name?.trim()) errors.name = "Product name is required.";
+  if (!data.description?.trim() || data.description.length < 15) {
+    errors.description = "Description must be at least 15 characters.";
   }
-  if (isNaN(parseFloat(data.price)) || parseFloat(data.price) <= 0) {
-    return "Price must be a positive number";
+
+  // --- Price Validation ---
+  const priceValue = parseFloat(data.price);
+  const priceToValue = parseFloat(data.price_to);
+  const crossedPriceValue = parseFloat(data.crossed_price);
+
+  if (data.price_option === "Fixed" || data.price_option === "Crossed") {
+    if (!data.price || isNaN(priceValue) || priceValue <= 0) {
+      errors.price = "A valid fixed price is required.";
+    }
+  } else if (data.price_option === "Range") {
+    if (!data.price || isNaN(priceValue) || priceValue <= 0) {
+      errors.price = "A valid 'Price From' is required.";
+    }
+    if (
+      !data.price_to ||
+      isNaN(priceToValue) ||
+      priceToValue <= 0 ||
+      priceToValue < priceValue
+    ) {
+      errors.price_to =
+        "A valid 'Price To' is required and must be greater than Price From.";
+    }
+  } else if (data.price_option === "Negotiable") {
+    // Price is optional, but if provided, must be valid
+    if (data.price && (isNaN(priceValue) || priceValue <= 0)) {
+      errors.price = "If providing a price, it must be valid.";
+    }
   }
-  return null;
+
+  if (data.price_option === "Crossed") {
+    if (
+      !data.crossed_price ||
+      isNaN(crossedPriceValue) ||
+      crossedPriceValue <= priceValue
+    ) {
+      errors.crossed_price =
+        "Original price (crossed) is required and must be higher than the new price.";
+    }
+  }
+
+  // --- Other Validations ---
+  if (data.category.length === 0)
+    errors.category = "At least one category is required.";
+  if (!data.type?.trim()) errors.type = "Product condition (type) is required.";
+  if (!data.location?.trim()) errors.location = "Location is required.";
+  if (data.images.length === 0)
+    errors.images = "At least one product image is required.";
+  if (!data.posted_from?.trim())
+    errors.posted_from = "Posting source is required.";
+
+  return Object.keys(errors).length > 0 ? errors : null;
 };
 
 app.get("/api/businesses", async (req, res) => {
@@ -858,24 +897,118 @@ app.get("/api/businesses", async (req, res) => {
   }
 });
 
+// app.post("/api/products", async (req, res) => {
+//   try {
+//     // Validation
+//     const validationError = validateProductData(req.body);
+//     if (validationError) {
+//       return res.status(400).json({ error: validationError });
+//     }
+
+//     const { userId, price, ...otherData } = req.body;
+
+//     // CORRECTED: Get user WITHOUT any plan include
+//     const user = await prisma.user.findUnique({
+//       where: { id: userId },
+//       include: {
+//         products: {
+//           where: {
+//             status: "ACTIVE",
+//           },
+//         },
+//       },
+//     });
+
+//     if (!user) {
+//       return res.status(404).json({ error: "User not found" });
+//     }
+
+//     // CORRECTED: Get plan separately using user.plan_id
+//     const activePlan = await prisma.plans.findUnique({
+//       where: {
+//         id: user.plan_id || 1,
+//       },
+//     });
+
+//     if (!activePlan) {
+//       return res.status(400).json({ error: "No active plan found" });
+//     }
+
+//     const productLimit = activePlan.allowedProducts;
+//     const currentProductCount = user.products.length;
+
+//     if (currentProductCount >= productLimit) {
+//       return res.status(403).json({
+//         error: `Product limit reached. You can only create ${productLimit} product(s) with your ${activePlan.name}.`,
+//         code: "PRODUCT_LIMIT_REACHED",
+//         currentCount: currentProductCount,
+//         limit: productLimit,
+//       });
+//     }
+
+//     const product = await prisma.product.create({
+//       data: {
+//         ...otherData,
+//         userId: userId,
+//         // Parse all numeric optional fields
+//         price: parseFloat(price || 0),
+//         price_to: price_to ? parseFloat(price_to) : null,
+//         crossed_price: crossed_price ? parseFloat(crossed_price) : null,
+//         // New string fields
+//         category: category,
+//         type: type,
+//         posted_from: posted_from,
+//         status: otherData.status || "PENDING",
+//       },
+//     });
+
+//     res.json({
+//       success: true,
+//       product,
+//       message: "Product submitted for approval",
+//     });
+//   } catch (error) {
+//     console.error("Error creating product:", error);
+//     res.status(400).json({
+//       error: error.message || "Failed to create product",
+//     });
+//   }
+// });
+
+// POST /api/products
 app.post("/api/products", async (req, res) => {
   try {
+    const {
+      userId,
+      name,
+      description,
+      price,
+      price_to,
+      price_option,
+      crossed_price,
+      category,
+      type,
+      location,
+      posted_from,
+      posted_from_type,
+      posted_from_id,
+      image,
+      status = "PENDING",
+    } = req.body;
+
     // Validation
     const validationError = validateProductData(req.body);
     if (validationError) {
       return res.status(400).json({ error: validationError });
     }
 
-    const { userId, price, ...otherData } = req.body;
-
-    // CORRECTED: Get user WITHOUT any plan include
+    // Check if user exists
     const user = await prisma.user.findUnique({
-      where: { id: userId },
+      where: { id: parseInt(userId) },
       include: {
+        plan: true,
         products: {
-          where: {
-            status: "ACTIVE",
-          },
+          where: { status: "ACTIVE" },
         },
       },
     });
@@ -884,47 +1017,57 @@ app.post("/api/products", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // CORRECTED: Get plan separately using user.plan_id
-    const activePlan = await prisma.plans.findUnique({
-      where: {
-        id: user.plan_id || 1,
-      },
-    });
-
-    if (!activePlan) {
-      return res.status(400).json({ error: "No active plan found" });
+    if (!user.plan) {
+      return res.status(400).json({ error: "User has no active plan" });
     }
 
-    const productLimit = activePlan.allowedProducts;
+    // Check product limit
+    const productLimit = user.plan.allowedProducts;
     const currentProductCount = user.products.length;
 
     if (currentProductCount >= productLimit) {
       return res.status(403).json({
-        error: `Product limit reached. You can only create ${productLimit} product(s) with your ${activePlan.name}.`,
+        error: `Product limit reached. You can only create ${productLimit} product(s) with your ${user.plan.name} plan.`,
         code: "PRODUCT_LIMIT_REACHED",
         currentCount: currentProductCount,
         limit: productLimit,
       });
     }
 
-    // Create the product
+    // Create product
     const product = await prisma.product.create({
       data: {
-        ...otherData,
-        userId: userId,
-        price: parseFloat(price),
-        status: otherData.status || "PENDING",
+        name,
+        description,
+        price: parseFloat(price || 0),
+        price_to: price_to ? parseFloat(price_to) : null,
+        price_option,
+        crossed_price: crossed_price ? parseFloat(crossed_price) : null,
+        category,
+        type,
+        location,
+        posted_from,
+        posted_from_type: posted_from_type || "Personal",
+        posted_from_id: posted_from_id || parseInt(userId),
+        image,
+        userId: parseInt(userId),
+        status,
       },
     });
 
     res.json({
       success: true,
       product,
-      message: "Product submitted for approval",
+      message: "Product submitted successfully for approval",
+      limits: {
+        currentCount: currentProductCount + 1,
+        limit: productLimit,
+        remaining: productLimit - (currentProductCount + 1),
+      },
     });
   } catch (error) {
     console.error("Error creating product:", error);
-    res.status(400).json({
+    res.status(500).json({
       error: error.message || "Failed to create product",
     });
   }
@@ -1577,6 +1720,167 @@ app.get("/api/entity/:type/:id/products", async (req, res) => {
   }
 });
 
+// GET /api/businesses/user/:userId?status=APPROVED
+app.get("/api/businesses/user/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { status } = req.query;
+
+    const whereClause = {
+      userId: parseInt(userId),
+    };
+
+    // Add status filter if provided
+    if (status) {
+      whereClause.status = status.toUpperCase();
+    }
+
+    const businesses = await prisma.business.findMany({
+      where: whereClause,
+      select: {
+        id: true,
+        name: true,
+        category: true,
+        location: true,
+        status: true,
+        createdAt: true,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    res.json(businesses);
+  } catch (error) {
+    console.error("Error fetching user businesses:", error);
+    res.status(500).json({ error: "Failed to fetch businesses" });
+  }
+});
+
+// GET /api/validate-submission/product?userId={userId}
+app.get("/api/validate-submission/:type", async (req, res) => {
+  try {
+    const { type } = req.params;
+    const { userId } = req.query;
+
+    if (!userId) {
+      return res.status(400).json({ error: "User ID is required" });
+    }
+
+    const parsedUserId = parseInt(userId);
+
+    // Get user with their plan
+    const user = await prisma.user.findUnique({
+      where: { id: parsedUserId },
+      include: {
+        plan: true, // Assuming you have a relation to Plans
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (!user.plan) {
+      return res.status(400).json({ error: "User has no active plan" });
+    }
+
+    let count;
+    let limit;
+
+    switch (type.toLowerCase()) {
+      case "product":
+        count = await prisma.product.count({
+          where: {
+            userId: parsedUserId,
+            status: "ACTIVE",
+          },
+        });
+        limit = user.plan.allowedProducts || 0;
+        break;
+
+      case "business":
+        count = await prisma.business.count({
+          where: {
+            userId: parsedUserId,
+            status: "ACTIVE",
+          },
+        });
+        limit = user.plan.allowedBusinesses || 0;
+        break;
+
+      case "professional":
+        count = await prisma.professional.count({
+          where: {
+            userId: parsedUserId,
+            status: "ACTIVE",
+          },
+        });
+        limit = user.plan.allowedProfessionals || 0;
+        break;
+
+      default:
+        return res.status(400).json({ error: "Invalid submission type" });
+    }
+
+    const canCreate = count < limit;
+
+    res.json({
+      canCreate,
+      productCount: type === "product" ? count : undefined,
+      businessCount: type === "business" ? count : undefined,
+      professionalCount: type === "professional" ? count : undefined,
+      productLimit: type === "product" ? limit : undefined,
+      businessLimit: type === "business" ? limit : undefined,
+      professionalLimit: type === "professional" ? limit : undefined,
+      message: canCreate
+        ? `You can create ${limit - count} more ${type}(s)`
+        : `You have reached your ${type} limit (${count}/${limit})`,
+    });
+  } catch (error) {
+    console.error("Error validating submission limit:", error);
+    res.status(500).json({ error: "Failed to validate submission limit" });
+  }
+});
+
+// GET /api/professionals/user/:userId?status=APPROVED
+app.get("/api/professionals/user/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { status } = req.query;
+
+    const whereClause = {
+      userId: parseInt(userId),
+    };
+
+    // Add status filter if provided
+    if (status) {
+      whereClause.status = status.toUpperCase();
+    }
+
+    const professionals = await prisma.professional.findMany({
+      where: whereClause,
+      select: {
+        id: true,
+        profession: true,
+        specialty: true,
+        experience: true,
+        location: true,
+        status: true,
+        createdAt: true,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    res.json(professionals);
+  } catch (error) {
+    console.error("Error fetching user professionals:", error);
+    res.status(500).json({ error: "Failed to fetch professionals" });
+  }
+});
+
 // Reject professional
 app.put("/api/professionals/:id/reject", async (req, res) => {
   try {
@@ -1629,18 +1933,42 @@ app.get("/api/products/:id", async (req, res) => {
       where: {
         id: productId,
       },
+      // 🔑 ADDED: Include the related 'user' data
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true, // Fetch the user's name
+            email: true, // Fetch the user's email
+            // Note: If 'phone' is on the User model, include it here.
+            // Since it's not in the provided User model, we'll assume it's fetched from the User model if available.
+          },
+        },
+      },
     });
 
     if (!product) {
       return res.status(404).json({ error: "Product not found" });
     }
 
-    res.json(product);
+    // 💡 OPTIONAL: Flatten the data for easier use on the frontend
+    const formattedProduct = {
+      ...product,
+      userName: product.user.name,
+      userEmail: product.user.email,
+      // userPhone: product.user.phone, // Include if phone is on the User model
+    };
+
+    // Remove the nested user object if you flattened it
+    delete formattedProduct.user;
+
+    res.json(formattedProduct); // Send the formatted product
   } catch (error) {
     console.error("Error fetching product:", error);
     res.status(500).json({ error: error.message });
   }
 });
+
 // Approve product
 app.put("/api/products/:id/approve", async (req, res) => {
   try {
@@ -1691,8 +2019,13 @@ app.put("/api/products/:id/reject", async (req, res) => {
 
 app.get("/api/professionals/approved", async (req, res) => {
   try {
-    const approvedProfessionals = await prisma.user.findMany({
-      where: { status: "ACTIVE" },
+    // 💡 FIX 1: Query the 'professional' model, not the 'user' model.
+    const approvedProfessionals = await prisma.professional.findMany({
+      // 💡 FIX 2: Filter by status on the Professional model.
+      // Assuming APPROVED is the correct status value based on the request logic.
+      where: { status: "APPROVED" },
+
+      // 💡 FIX 3: Include the related 'user' data for name/email.
       include: {
         user: { select: { id: true, name: true, email: true } },
       },
@@ -1703,6 +2036,7 @@ app.get("/api/professionals/approved", async (req, res) => {
       (professional) => ({
         id: professional.id,
         userId: professional.userId,
+        // The user data is now accessed correctly through the included 'user' object
         userName: professional.user.name,
         userEmail: professional.user.email,
         profession: professional.profession,
@@ -1722,6 +2056,8 @@ app.get("/api/professionals/approved", async (req, res) => {
     res.status(200).json(formattedProfessionals);
   } catch (error) {
     console.error("❌ Error fetching approved professionals:", error);
+    // You can log the full error for better debugging in the console
+    // console.error(error);
     res.status(500).json({ error: "Failed to fetch approved professionals" });
   }
 });
@@ -1843,6 +2179,194 @@ app.post("/api/upgrade-requests", async (req, res) => {
     res.status(400).json({ error: error.message });
   }
 });
+
+// Replace your current upgrade-requests endpoint with this:
+app.post("/api/verify-purchase", async (req, res) => {
+  try {
+    const { userId, planId, receiptData, transactionId } = req.body;
+
+    // Validate required fields
+    if (!userId || !planId || !receiptData || !transactionId) {
+      return res.status(400).json({ error: "All fields are required" });
+    }
+
+    // Verify receipt with Apple's servers
+    const verificationResult = await verifyAppleReceipt(receiptData);
+
+    if (verificationResult.valid) {
+      // Check if this transaction was already processed (prevent duplicate upgrades)
+      const existingTransaction = await prisma.transaction.findUnique({
+        where: { transactionId: transactionId },
+      });
+
+      if (existingTransaction) {
+        return res.status(400).json({
+          error: "This transaction was already processed",
+          transaction: existingTransaction,
+        });
+      }
+
+      // Update user's plan immediately
+      const updatedUser = await prisma.user.update({
+        where: { id: parseInt(userId) },
+        data: {
+          planId: parseInt(planId),
+          updatedAt: new Date(),
+        },
+        include: {
+          plan: true,
+        },
+      });
+
+      // Record the successful transaction
+      const transaction = await prisma.transaction.create({
+        data: {
+          userId: parseInt(userId),
+          planId: parseInt(planId),
+          transactionId: transactionId,
+          productId: verificationResult.productId,
+          amount: verificationResult.amount,
+          status: "COMPLETED",
+          paymentMethod: "APPLE_IAP",
+          purchaseDate: verificationResult.purchaseDate || new Date(),
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              plan: true,
+            },
+          },
+          plan: true,
+        },
+      });
+
+      // Optional: Send confirmation email or notification
+      await sendUpgradeConfirmation(updatedUser, transaction);
+
+      res.json({
+        success: true,
+        message: "Purchase verified and plan upgraded successfully",
+        user: updatedUser,
+        transaction: transaction,
+      });
+    } else {
+      res.status(400).json({
+        error: "Invalid receipt - purchase verification failed",
+        appleError: verificationResult.error,
+      });
+    }
+  } catch (error) {
+    console.error("Purchase verification error:", error);
+    res.status(500).json({ error: "Failed to verify purchase" });
+  }
+});
+
+// Enhanced Apple receipt verification
+async function verifyAppleReceipt(receiptData) {
+  try {
+    const verificationUrl =
+      process.env.NODE_ENV === "production"
+        ? "https://buy.itunes.apple.com/verifyReceipt"
+        : "https://sandbox.itunes.apple.com/verifyReceipt";
+
+    const response = await fetch(verificationUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        "receipt-data": receiptData,
+        password: process.env.APPLE_SHARED_SECRET,
+        "exclude-old-transactions": false,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (result.status === 0) {
+      // 0 = success
+      const latestReceipt =
+        result.latest_receipt_info?.[0] || result.receipt?.in_app?.[0];
+
+      if (!latestReceipt) {
+        return { valid: false, error: "No receipt info found" };
+      }
+
+      return {
+        valid: true,
+        amount: parseFloat(latestReceipt.price) || 0,
+        productId: latestReceipt.product_id,
+        purchaseDate: latestReceipt.purchase_date_ms
+          ? new Date(parseInt(latestReceipt.purchase_date_ms))
+          : new Date(),
+      };
+    } else {
+      console.log("Apple verification failed with status:", result.status);
+      return {
+        valid: false,
+        error: `Apple verification failed with status: ${result.status}`,
+      };
+    }
+  } catch (error) {
+    console.error("Apple verification error:", error);
+    return {
+      valid: false,
+      error: `Verification failed: ${error.message}`,
+    };
+  }
+}
+
+// Optional: Helper function for confirmation email
+async function sendUpgradeConfirmation(user, transaction) {
+  try {
+    // Implement your email service here (SendGrid, AWS SES, etc.)
+    console.log(
+      `Upgrade confirmation sent to ${user.email} for plan ${transaction.plan.name}`
+    );
+  } catch (error) {
+    console.error("Failed to send upgrade confirmation:", error);
+  }
+}
+
+// Helper function to verify with Apple
+async function verifyAppleReceipt(receiptData) {
+  try {
+    const verificationUrl =
+      process.env.NODE_ENV === "production"
+        ? "https://buy.itunes.apple.com/verifyReceipt"
+        : "https://sandbox.itunes.apple.com/verifyReceipt";
+
+    const response = await fetch(verificationUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        "receipt-data": receiptData,
+        password: process.env.APPLE_SHARED_SECRET, // From App Store Connect
+        "exclude-old-transactions": false,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (result.status === 0) {
+      // 0 = success
+      const latestReceipt = result.latest_receipt_info[0];
+      return {
+        valid: true,
+        amount: parseFloat(latestReceipt.price),
+        productId: latestReceipt.product_id,
+        purchaseDate: new Date(parseInt(latestReceipt.purchase_date_ms)),
+      };
+    } else {
+      console.log("Apple verification failed with status:", result.status);
+      return { valid: false, error: result.status };
+    }
+  } catch (error) {
+    console.error("Apple verification error:", error);
+    return { valid: false, error: "Verification failed" };
+  }
+}
 
 // GET - All upgrade requests (for admin)
 app.get("/api/upgrade-requests", async (req, res) => {
