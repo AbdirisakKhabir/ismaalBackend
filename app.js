@@ -1727,7 +1727,7 @@ app.get("/api/validate-submission/:type", async (req, res) => {
         count = await prisma.product.count({
           where: {
             userId: parsedUserId,
-            status: "ACTIVE",
+            status: "APPROVED",
           },
         });
         limit = user.plan.allowedProducts || 0;
@@ -1737,7 +1737,7 @@ app.get("/api/validate-submission/:type", async (req, res) => {
         count = await prisma.business.count({
           where: {
             userId: parsedUserId,
-            status: "ACTIVE",
+            status: "APPROVED",
           },
         });
         limit = user.plan.allowedBusinesses || 0;
@@ -1747,7 +1747,7 @@ app.get("/api/validate-submission/:type", async (req, res) => {
         count = await prisma.professional.count({
           where: {
             userId: parsedUserId,
-            status: "ACTIVE",
+            status: "APPROVED",
           },
         });
         limit = user.plan.allowedProfessionals || 0;
