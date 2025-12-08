@@ -51,8 +51,8 @@ model Product {
   name          String
   description   String   @db.Text
   // New Price Fields
-  price         Decimal // Base price / Price From
-  price_to      Decimal? // Price To (Used for Range)
+  price         Decimal
+  price_to      Decimal?
   price_option  String   @default("Fixed") // Fixed, Range, Negotiable, Crossed
   crossed_price Decimal? // Original price (Used for Crossed)
 

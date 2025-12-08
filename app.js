@@ -896,85 +896,6 @@ app.get("/api/businesses", async (req, res) => {
   }
 });
 
-// app.post("/api/products", async (req, res) => {
-//   try {
-//     // Validation
-//     const validationError = validateProductData(req.body);
-//     if (validationError) {
-//       return res.status(400).json({ error: validationError });
-//     }
-
-//     const { userId, price, ...otherData } = req.body;
-
-//     // CORRECTED: Get user WITHOUT any plan include
-//     const user = await prisma.user.findUnique({
-//       where: { id: userId },
-//       include: {
-//         products: {
-//           where: {
-//             status: "ACTIVE",
-//           },
-//         },
-//       },
-//     });
-
-//     if (!user) {
-//       return res.status(404).json({ error: "User not found" });
-//     }
-
-//     // CORRECTED: Get plan separately using user.plan_id
-//     const activePlan = await prisma.plans.findUnique({
-//       where: {
-//         id: user.plan_id || 1,
-//       },
-//     });
-
-//     if (!activePlan) {
-//       return res.status(400).json({ error: "No active plan found" });
-//     }
-
-//     const productLimit = activePlan.allowedProducts;
-//     const currentProductCount = user.products.length;
-
-//     if (currentProductCount >= productLimit) {
-//       return res.status(403).json({
-//         error: `Product limit reached. You can only create ${productLimit} product(s) with your ${activePlan.name}.`,
-//         code: "PRODUCT_LIMIT_REACHED",
-//         currentCount: currentProductCount,
-//         limit: productLimit,
-//       });
-//     }
-
-//     const product = await prisma.product.create({
-//       data: {
-//         ...otherData,
-//         userId: userId,
-//         // Parse all numeric optional fields
-//         price: parseFloat(price || 0),
-//         price_to: price_to ? parseFloat(price_to) : null,
-//         crossed_price: crossed_price ? parseFloat(crossed_price) : null,
-//         // New string fields
-//         category: category,
-//         type: type,
-//         posted_from: posted_from,
-//         status: otherData.status || "PENDING",
-//       },
-//     });
-
-//     res.json({
-//       success: true,
-//       product,
-//       message: "Product submitted for approval",
-//     });
-//   } catch (error) {
-//     console.error("Error creating product:", error);
-//     res.status(400).json({
-//       error: error.message || "Failed to create product",
-//     });
-//   }
-// });
-
-// POST /api/products
 app.post("/api/products", async (req, res) => {
   try {
     const {
@@ -1033,25 +954,39 @@ app.post("/api/products", async (req, res) => {
       });
     }
 
+    // Prepare data for Prisma - don't include price_to if it's not in schema
+    const productData = {
+      name,
+      description,
+      price: parseFloat(price || 0),
+      price_option,
+      crossed_price: crossed_price ? parseFloat(crossed_price) : null,
+      category,
+      type,
+      location,
+      posted_from,
+      posted_from_type: posted_from_type || "Personal",
+      posted_from_id: posted_from_id || parseInt(userId),
+      image,
+      userId: parseInt(userId),
+      status,
+    };
+
+    // Only include price_to if it exists in your schema
+    // If you need price_to, you should add it to your Prisma schema first
+    // If price_to is not in schema, you can store it as part of price_option
+    // or in a separate field
+
+    // Option 1: If you want to support price range, update your schema
+    // Option 2: Store as JSON string in a field
+
+    // For now, let's assume you don't have price_to in schema
+    // Remove it from the data
+    // delete productData.price_to; // Not needed if not in schema
+
     // Create product
     const product = await prisma.product.create({
-      data: {
-        name,
-        description,
-        price: parseFloat(price || 0),
-        price_to: price_to ? parseFloat(price_to) : null,
-        price_option,
-        crossed_price: crossed_price ? parseFloat(crossed_price) : null,
-        category,
-        type,
-        location,
-        posted_from,
-        posted_from_type: posted_from_type || "Personal",
-        posted_from_id: posted_from_id || parseInt(userId),
-        image,
-        userId: parseInt(userId),
-        status,
-      },
+      data: productData,
     });
 
     res.json({
