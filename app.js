@@ -1726,7 +1726,7 @@ app.get("/api/businesses/user/:userId", async (req, res) => {
     const { status } = req.query;
 
     const whereClause = {
-      userId: parseInt(userId),
+      ownerId: parseInt(userId),
     };
 
     // Add status filter if provided
