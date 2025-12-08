@@ -696,7 +696,6 @@ app.get("/api/users/:userId/usage", async (req, res) => {
   }
 });
 
-// 🌟 UPDATED: app.post("/api/businesses") 🌟
 app.post("/api/businesses", async (req, res) => {
   try {
     // 1. Run the updated server-side validation
@@ -712,7 +711,7 @@ app.post("/api/businesses", async (req, res) => {
       phone,
       email,
       location,
-      images, // This should be an array of image URLs
+      image,
       ownerId,
       businessType = "GENERAL",
     } = req.body;
@@ -723,7 +722,7 @@ app.post("/api/businesses", async (req, res) => {
       include: {
         businesses: {
           where: {
-            status: "ACTIVE",
+            status: "APPROVED",
           },
         },
       },
@@ -780,9 +779,9 @@ app.post("/api/businesses", async (req, res) => {
       });
 
       // Then create image records if images are provided
-      if (images && images.length > 0) {
+      if (image && image.length > 0) {
         await prisma.businessImage.createMany({
-          data: images.map((url, index) => ({
+          data: image.map((url, index) => ({
             url: url,
             order: index + 1,
             businessId: business.id,
