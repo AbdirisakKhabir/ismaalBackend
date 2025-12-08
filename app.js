@@ -824,6 +824,17 @@ app.post("/api/businesses", async (req, res) => {
   }
 });
 
+app.get("/api/businesses", async (req, res) => {
+  try {
+    const businesses = await prisma.business.findMany({
+      where: { status: "APPROVED" },
+    });
+    res.json(businesses);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 const validateProductData = (data) => {
   const errors = {};
 
@@ -877,24 +888,13 @@ const validateProductData = (data) => {
     errors.category = "At least one category is required.";
   if (!data.type?.trim()) errors.type = "Product condition (type) is required.";
   if (!data.location?.trim()) errors.location = "Location is required.";
-  if (data.images.length === 0)
-    errors.images = "At least one product image is required.";
+  if (data.image.length === 0)
+    errors.image = "At least one product image is required.";
   if (!data.posted_from?.trim())
     errors.posted_from = "Posting source is required.";
 
   return Object.keys(errors).length > 0 ? errors : null;
 };
-
-app.get("/api/businesses", async (req, res) => {
-  try {
-    const businesses = await prisma.business.findMany({
-      where: { status: "APPROVED" },
-    });
-    res.json(businesses);
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-});
 
 app.post("/api/products", async (req, res) => {
   try {
@@ -2702,7 +2702,6 @@ app.get("/api/users/:userId/profiles", async (req, res) => {
   }
 });
 
-// GET /api/businesses/user/:userId?status=APPROVED
 app.get("/api/businesses/user/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
