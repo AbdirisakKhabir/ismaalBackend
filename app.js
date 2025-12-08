@@ -1654,43 +1654,6 @@ app.get("/api/entity/:type/:id/products", async (req, res) => {
   }
 });
 
-// GET /api/businesses/user/:userId?status=APPROVED
-app.get("/api/businesses/user/:userId", async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { status } = req.query;
-
-    const whereClause = {
-      ownerId: parseInt(userId),
-    };
-
-    // Add status filter if provided
-    if (status) {
-      whereClause.status = status.toUpperCase();
-    }
-
-    const businesses = await prisma.business.findMany({
-      where: whereClause,
-      select: {
-        id: true,
-        name: true,
-        category: true,
-        location: true,
-        status: true,
-        createdAt: true,
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-    });
-
-    res.json(businesses);
-  } catch (error) {
-    console.error("Error fetching user businesses:", error);
-    res.status(500).json({ error: "Failed to fetch businesses" });
-  }
-});
-
 // GET /api/professionals/user/:userId?status=APPROVED
 app.get("/api/professionals/user/:userId", async (req, res) => {
   try {
@@ -2736,6 +2699,43 @@ app.get("/api/users/:userId/profiles", async (req, res) => {
   } catch (error) {
     console.error("Error fetching user businesses:", error);
     res.status(500).json({ error: "Failed to fetch user businesses." });
+  }
+});
+
+// GET /api/businesses/user/:userId?status=APPROVED
+app.get("/api/businesses/user/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { status } = req.query;
+
+    const whereClause = {
+      ownerId: parseInt(userId),
+    };
+
+    // Add status filter if provided
+    if (status) {
+      whereClause.status = status.toUpperCase();
+    }
+
+    const businesses = await prisma.business.findMany({
+      where: whereClause,
+      select: {
+        id: true,
+        name: true,
+        category: true,
+        location: true,
+        status: true,
+        createdAt: true,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    res.json(businesses);
+  } catch (error) {
+    console.error("Error fetching user businesses:", error);
+    res.status(500).json({ error: "Failed to fetch businesses" });
   }
 });
 
