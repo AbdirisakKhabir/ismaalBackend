@@ -711,15 +711,16 @@ app.post("/api/businesses", async (req, res) => {
       phone,
       email,
       location,
-      image,
+      image, // This should be a comma-separated string of URLs
       ownerId,
       businessType = "GENERAL",
     } = req.body;
 
-    // 2. Limit Check Logic (same as above)
+    // 2. Limit Check Logic
     const user = await prisma.user.findUnique({
       where: { id: ownerId },
       include: {
+        plan: true,
         businesses: {
           where: {
             status: "APPROVED",
@@ -732,75 +733,47 @@ app.post("/api/businesses", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    let activePlan = null;
-    if (user.plan_id) {
-      activePlan = await prisma.plans.findUnique({
-        where: { id: user.plan_id },
+    // Get the user's plan - it's an array
+    let userPlan;
+    if (user.plan && user.plan.length > 0) {
+      userPlan = user.plan[0];
+    } else {
+      userPlan = await prisma.plans.findUnique({
+        where: { id: user.plan_id || 1 },
       });
     }
 
-    if (!activePlan) {
-      activePlan = await prisma.plans.findUnique({
-        where: { id: 1 },
-      });
-    }
-
-    if (!activePlan) {
+    if (!userPlan) {
       return res.status(400).json({ error: "No active plan found" });
     }
 
-    const businessLimit = activePlan.allowedBusinesses;
+    const businessLimit = userPlan.allowedBusinesses;
     const currentBusinessCount = user.businesses.length;
 
     if (currentBusinessCount >= businessLimit) {
       return res.status(403).json({
-        error: `Business limit reached. You can only create ${businessLimit} business(es) with your ${activePlan.name}.`,
+        error: `Business limit reached. You can only create ${businessLimit} business(es) with your ${userPlan.name}.`,
         code: "BUSINESS_LIMIT_REACHED",
         currentCount: currentBusinessCount,
         limit: businessLimit,
       });
     }
 
-    // 3. Create Business and Images in a transaction
-    const result = await prisma.$transaction(async (prisma) => {
-      // Create business first
-      const business = await prisma.business.create({
-        data: {
-          name,
-          description,
-          category,
-          phone,
-          email,
-          location,
-          ownerId,
-          status: "PENDING",
-          businessType,
-        },
-      });
-
-      // Then create image records if images are provided
-      if (image && image.length > 0) {
-        await prisma.businessImage.createMany({
-          data: image.map((url, index) => ({
-            url: url,
-            order: index + 1,
-            businessId: business.id,
-          })),
-        });
-      }
-
-      return business;
-    });
-
-    // 4. Return the created business with images
-    const businessWithImages = await prisma.business.findUnique({
-      where: { id: result.id },
+    // 3. Create Business with comma-separated image string
+    const business = await prisma.business.create({
+      data: {
+        name,
+        description,
+        category,
+        phone,
+        email,
+        location,
+        image: image, // Store as comma-separated string
+        ownerId,
+        status: "PENDING",
+        businessType,
+      },
       include: {
-        images: {
-          orderBy: {
-            order: "asc",
-          },
-        },
         owner: {
           select: {
             id: true,
@@ -813,8 +786,13 @@ app.post("/api/businesses", async (req, res) => {
 
     res.json({
       success: true,
-      business: businessWithImages,
+      business,
       message: "Business submitted for approval",
+      limits: {
+        currentCount: currentBusinessCount + 1,
+        limit: businessLimit,
+        remaining: businessLimit - (currentBusinessCount + 1),
+      },
     });
   } catch (error) {
     console.error("Error creating business:", error);
@@ -909,9 +887,8 @@ app.post("/api/products", async (req, res) => {
       category,
       type,
       location,
-      posted_from,
-      posted_from_type,
-      posted_from_id,
+      posted_from, // This should be a string like "Personal Account" or "Business: Business Name"
+      posted_from_id, // This is the numeric ID
       image,
       status = "PENDING",
     } = req.body;
@@ -937,24 +914,41 @@ app.post("/api/products", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    if (!user.plan) {
+    // Get the user's plan - it's an array
+    let userPlan;
+    if (user.plan && user.plan.length > 0) {
+      userPlan = user.plan[0];
+    } else {
+      userPlan = await prisma.plans.findUnique({
+        where: { id: user.plan_id || 1 },
+      });
+    }
+
+    if (!userPlan) {
       return res.status(400).json({ error: "User has no active plan" });
     }
 
     // Check product limit
-    const productLimit = user.plan.allowedProducts;
+    const productLimit = userPlan.allowedProducts;
     const currentProductCount = user.products.length;
 
     if (currentProductCount >= productLimit) {
       return res.status(403).json({
-        error: `Product limit reached. You can only create ${productLimit} product(s) with your ${user.plan.name} plan.`,
+        error: `Product limit reached. You can only create ${productLimit} product(s) with your ${userPlan.name} plan.`,
         code: "PRODUCT_LIMIT_REACHED",
         currentCount: currentProductCount,
         limit: productLimit,
       });
     }
 
-    // Prepare data for Prisma - don't include price_to if it's not in schema
+    // Make sure posted_from is a string
+    let postedFromString = posted_from;
+    if (typeof postedFromString !== "string") {
+      // If posted_from is not a string, convert it
+      postedFromString = String(postedFromString || "Personal Account");
+    }
+
+    // Create product data
     const productData = {
       name,
       description,
@@ -964,25 +958,18 @@ app.post("/api/products", async (req, res) => {
       category,
       type,
       location,
-      posted_from,
-      posted_from_type: posted_from_type || "Personal",
-      posted_from_id: posted_from_id || parseInt(userId),
+      posted_from: postedFromString, // Must be a string
       image,
       userId: parseInt(userId),
       status,
     };
 
-    // Only include price_to if it exists in your schema
-    // If you need price_to, you should add it to your Prisma schema first
-    // If price_to is not in schema, you can store it as part of price_option
-    // or in a separate field
+    // Only include price_to if it has a value
+    if (price_to !== undefined && price_to !== null && price_to !== "") {
+      productData.price_to = parseFloat(price_to);
+    }
 
-    // Option 1: If you want to support price range, update your schema
-    // Option 2: Store as JSON string in a field
-
-    // For now, let's assume you don't have price_to in schema
-    // Remove it from the data
-    // delete productData.price_to; // Not needed if not in schema
+    console.log("Creating product with data:", productData);
 
     // Create product
     const product = await prisma.product.create({
