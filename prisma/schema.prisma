@@ -130,6 +130,7 @@ model Professional {
   location      String
   phone         String
   email         String
+  description   String? // Add this line (optional field)
   image         String?
   status        Status   @default(PENDING)
   submittedDate DateTime @default(now())

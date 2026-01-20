@@ -1361,19 +1361,44 @@ app.patch("/api/products/:id/status", async (req, res) => {
 
 // Professional routes
 const validateProfessionalData = (data) => {
-  const required = [
-    "userId",
-    "profession",
-    "specialty",
-    "experience",
-    "location",
-    "phone",
-    "email",
-  ];
-  for (const field of required) {
-    if (!data[field]) return `${field} is required`;
+  const errors = {};
+
+  if (data.profession.length === 0) {
+    errors.profession = "At least one profession is required";
+  } else if (data.profession.length > 5) {
+    errors.profession = "Maximum 5 professions allowed";
   }
-  return null;
+
+  if (!data.specialty?.trim()) {
+    errors.specialty = "Specialty/Education level is required";
+  }
+
+  if (!data.experience?.trim()) {
+    errors.experience = "Experience level is required";
+  }
+
+  if (!data.location?.trim()) {
+    errors.location = "Location is required";
+  }
+
+  if (!data.phone?.trim()) {
+    errors.phone = "Phone number is required";
+  } else if (!/^\d{5,15}$/.test(data.phone)) {
+    errors.phone = "Please enter a valid phone number (digits only)";
+  }
+
+  if (!data.email?.trim()) {
+    errors.email = "Email is required";
+  } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)) {
+    errors.email = "Please enter a valid email address";
+  }
+
+  // Optional: Add description validation if needed
+  if (data.description && data.description.length > 1000) {
+    errors.description = "Description must be 1000 characters or less";
+  }
+
+  return Object.keys(errors).length > 0 ? errors : null;
 };
 
 app.post("/api/professionals", async (req, res) => {
