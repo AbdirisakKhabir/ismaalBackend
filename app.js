@@ -534,7 +534,7 @@ app.get("/api/plans", async (req, res) => {
   try {
     const plans = await prisma.plans.findMany({
       include: {
-        user: {
+        users: {
           select: {
             id: true,
             name: true,
