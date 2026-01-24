@@ -78,6 +78,51 @@ app.post("/api/auth/login", async (req, res) => {
     res.status(400).json({ error: error.message });
   }
 });
+
+// Admin Login - Only allows users with ADMIN role
+app.post("/api/auth/admin/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // Validate input
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password are required" });
+    }
+
+    // Find user by email
+    const user = await prisma.user.findUnique({ where: { email } });
+
+    if (!user) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    // Verify password
+    const validPassword = await bcrypt.compare(password, user.password);
+
+    if (!validPassword) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    // Check if user is ADMIN
+    if (user.role !== "ADMIN") {
+      return res.status(403).json({ 
+        error: "Access denied. Admin privileges required." 
+      });
+    }
+
+    // Return user data without password
+    const { password: _, ...userWithoutPassword } = user;
+    
+    res.json({
+      user: userWithoutPassword,
+      message: "Admin login successful"
+    });
+  } catch (error) {
+    console.error("Admin login error:", error);
+    res.status(500).json({ error: "Login failed. Please try again." });
+  }
+});
+
 // Delete account permanently
 app.delete("/api/auth/account", async (req, res) => {
   try {
