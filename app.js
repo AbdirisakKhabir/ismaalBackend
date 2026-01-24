@@ -267,6 +267,214 @@ app.post("/api/upload", upload.array("images"), async (req, res) => {
   }
 });
 
+app.get("/api/users", async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        location: true,
+        role: true,
+        plan_id: true,
+        createdAt: true,
+        updatedAt: true,
+        _count: {
+          select: {
+            businesses: true,
+            products: true,
+            professionals: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    // Get plan details for each user
+    const usersWithPlans = await Promise.all(
+      users.map(async (user) => {
+        let plan = null;
+        if (user.plan_id) {
+          plan = await prisma.plans.findUnique({
+            where: { id: user.plan_id },
+            select: {
+              id: true,
+              name: true,
+              price: true,
+              allowedBusinesses: true,
+              allowedProducts: true,
+            },
+          });
+        }
+        return {
+          ...user,
+          plan,
+        };
+      })
+    );
+
+    res.json(usersWithPlans);
+  } catch (error) {
+    console.error("Error fetching users:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+app.get("/api/users/:id", async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+
+    if (isNaN(userId)) {
+      return res.status(400).json({ error: "Invalid user ID" });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        location: true,
+        role: true,
+        plan_id: true,
+        createdAt: true,
+        updatedAt: true,
+        _count: {
+          select: {
+            businesses: true,
+            products: true,
+            professionals: true,
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Get plan details
+    let plan = null;
+    if (user.plan_id) {
+      plan = await prisma.plans.findUnique({
+        where: { id: user.plan_id },
+        select: {
+          id: true,
+          name: true,
+          price: true,
+          allowedBusinesses: true,
+          allowedProducts: true,
+        },
+      });
+    }
+
+    res.json({
+      ...user,
+      plan,
+    });
+  } catch (error) {
+    console.error("Error fetching user:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/users/:id", async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+
+    if (isNaN(userId)) {
+      return res.status(400).json({ error: "Invalid user ID" });
+    }
+
+    // Check if user exists
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        _count: {
+          select: {
+            businesses: true,
+            products: true,
+            professionals: true,
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Prevent deletion of admin users (optional safety check)
+    if (user.role === "ADMIN") {
+      return res.status(403).json({ error: "Cannot delete admin users" });
+    }
+
+    // Delete user and all related data using transaction
+    await prisma.$transaction(async (tx) => {
+      // Delete user's sessions if they exist
+      try {
+        await tx.session.deleteMany({
+          where: { userId: userId },
+        });
+      } catch (e) {
+        // Session table might not exist, ignore error
+      }
+
+      // Delete user's upgrade requests
+      try {
+        await tx.planUpgradeRequest.deleteMany({
+          where: { userId: userId },
+        });
+      } catch (e) {
+        // Table might not exist, ignore error
+      }
+
+      // Delete user's professionals
+      await tx.professional.deleteMany({
+        where: { userId: userId },
+      });
+
+      // Delete user's products
+      await tx.product.deleteMany({
+        where: { userId: userId },
+      });
+
+      // Delete user's businesses
+      await tx.business.deleteMany({
+        where: { ownerId: userId },
+      });
+
+      // Finally delete the user
+      await tx.user.delete({
+        where: { id: userId },
+      });
+    });
+
+    res.json({
+      success: true,
+      message: "User and all related data deleted successfully",
+      deletedUser: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+      },
+    });
+  } catch (error) {
+    console.error("Error deleting user:", error);
+
+    if (error.code === "P2025") {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.status(500).json({ error: "Failed to delete user" });
+  }
+});
+
 // Backend: Single Image Upload API (POST /api/upload/single)
 
 // Multer now uses upload.single() and expects a field named "image"
