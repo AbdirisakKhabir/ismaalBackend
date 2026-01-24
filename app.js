@@ -1612,25 +1612,9 @@ app.get("/api/businesses/:id", async (req, res) => {
 app.delete("/api/businesses/:id", async (req, res) => {
   try {
     const numericId = parseInt(req.params.id, 10);
-    const currentUserId = parseInt(req.userId, 10);
 
     if (isNaN(numericId)) {
       return res.status(400).json({ error: "Invalid business ID" });
-    }
-
-    const business = await prisma.business.findUnique({
-      where: { id: numericId },
-    });
-
-    if (!business) {
-      return res.status(404).json({ error: "Business not found" });
-    }
-
-    // Only owner (or later, admin) can delete
-    if (business.ownerId !== currentUserId) {
-      return res
-        .status(403)
-        .json({ error: "Not authorized to delete this business" });
     }
 
     const deletedBusiness = await prisma.business.delete({
