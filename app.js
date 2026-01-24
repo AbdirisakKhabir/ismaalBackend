@@ -1822,6 +1822,32 @@ app.get("/api/products/:id", async (req, res) => {
   }
 });
 
+app.delete("/api/products/:id", async (req, res) => {
+  try {
+    const numericId = parseInt(req.params.id, 10);
+
+    if (isNaN(numericId)) {
+      return res.status(400).json({ error: "Invalid product ID" });
+    }
+
+    const deletedProduct = await prisma.product.delete({
+      where: { id: numericId },
+    });
+
+    return res.json({
+      message: "Product deleted successfully",
+      product: deletedProduct,
+    });
+  } catch (error) {
+    console.error("Error deleting product:", error);
+
+    if (error.code === "P2025") {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    return res.status(500).json({ error: "Failed to delete product" });
+  }
+});
 // Approve product
 app.put("/api/products/:id/approve", async (req, res) => {
   try {
