@@ -274,8 +274,6 @@ app.get("/api/users", async (req, res) => {
         id: true,
         name: true,
         email: true,
-        phone: true,
-        location: true,
         role: true,
         plan_id: true,
         createdAt: true,
@@ -284,7 +282,11 @@ app.get("/api/users", async (req, res) => {
           select: {
             businesses: true,
             products: true,
-            professionals: true,
+          },
+        },
+        professional: {
+          select: {
+            id: true,
           },
         },
       },
@@ -312,6 +314,11 @@ app.get("/api/users", async (req, res) => {
         return {
           ...user,
           plan,
+          // Add professional count (0 or 1 since it's a single relation)
+          _count: {
+            ...user._count,
+            professionals: user.professional ? 1 : 0,
+          },
         };
       })
     );
@@ -338,8 +345,6 @@ app.get("/api/users/:id", async (req, res) => {
         id: true,
         name: true,
         email: true,
-        phone: true,
-        location: true,
         role: true,
         plan_id: true,
         createdAt: true,
@@ -348,7 +353,11 @@ app.get("/api/users/:id", async (req, res) => {
           select: {
             businesses: true,
             products: true,
-            professionals: true,
+          },
+        },
+        professional: {
+          select: {
+            id: true,
           },
         },
       },
@@ -376,6 +385,10 @@ app.get("/api/users/:id", async (req, res) => {
     res.json({
       ...user,
       plan,
+      _count: {
+        ...user._count,
+        professionals: user.professional ? 1 : 0,
+      },
     });
   } catch (error) {
     console.error("Error fetching user:", error);
