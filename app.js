@@ -1963,6 +1963,34 @@ app.get("/api/professionals/:id", async (req, res) => {
   }
 });
 
+app.delete("/api/professionals/:id", async (req, res) => {
+  try {
+    const numericId = parseInt(req.params.id, 10);
+
+    if (isNaN(numericId)) {
+      return res.status(400).json({ error: "Invalid professional ID" });
+    }
+
+    const deletedProfessional = await prisma.professional.delete({
+      where: { id: numericId },
+    });
+
+    return res.json({
+      message: "Professional deleted successfully",
+      professional: deletedProfessional,
+    });
+  } catch (error) {
+    console.error("Error deleting professional:", error);
+
+    if (error.code === "P2025") {
+      return res.status(404).json({ error: "Professional not found" });
+    }
+
+    return res.status(500).json({ error: "Failed to delete professional" });
+  }
+});
+
+
 // Get all professionals (for admin)
 app.get("/api/admin/professionals", async (req, res) => {
   try {
