@@ -1606,6 +1606,52 @@ app.get("/api/businesses/:id", async (req, res) => {
   }
 });
 
+
+
+
+app.delete("/api/businesses/:id", async (req, res) => {
+  try {
+    const numericId = parseInt(req.params.id, 10);
+    const currentUserId = parseInt(req.userId, 10);
+
+    if (isNaN(numericId)) {
+      return res.status(400).json({ error: "Invalid business ID" });
+    }
+
+    const business = await prisma.business.findUnique({
+      where: { id: numericId },
+    });
+
+    if (!business) {
+      return res.status(404).json({ error: "Business not found" });
+    }
+
+    // Only owner (or later, admin) can delete
+    if (business.ownerId !== currentUserId) {
+      return res
+        .status(403)
+        .json({ error: "Not authorized to delete this business" });
+    }
+
+    const deletedBusiness = await prisma.business.delete({
+      where: { id: numericId },
+    });
+
+    return res.json({
+      message: "Business deleted successfully",
+      business: deletedBusiness,
+    });
+  } catch (error) {
+    console.error("Error deleting business:", error);
+
+    if (error.code === "P2025") {
+      return res.status(404).json({ error: "Business not found" });
+    }
+
+    return res.status(500).json({ error: "Failed to delete business" });
+  }
+});
+
 app.get("/api/entity/:type/:id/products", async (req, res) => {
   try {
     const { id, type } = req.params;
