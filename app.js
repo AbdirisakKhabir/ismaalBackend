@@ -565,41 +565,34 @@ app.delete("/api/users/:id", async (req, res) => {
     }
 
     // Delete user and all related data using transaction
+    // Order matters: delete children before parent (respect foreign keys)
     await prisma.$transaction(async (tx) => {
-      // Delete user's sessions if they exist
-      try {
-        await tx.session.deleteMany({
-          where: { userId: userId },
-        });
-      } catch (e) {
-        // Session table might not exist, ignore error
-      }
+      // 1. Delete user's plan upgrade requests
+      await tx.planUpgradeRequest.deleteMany({
+        where: { userId: userId },
+      });
 
-      // Delete user's upgrade requests
-      try {
-        await tx.planUpgradeRequest.deleteMany({
-          where: { userId: userId },
-        });
-      } catch (e) {
-        // Table might not exist, ignore error
-      }
+      // 2. Delete user's transactions
+      await tx.transaction.deleteMany({
+        where: { userId: userId },
+      });
 
-      // Delete user's professionals
+      // 3. Delete user's professional (one-to-one)
       await tx.professional.deleteMany({
         where: { userId: userId },
       });
 
-      // Delete user's products
+      // 4. Delete user's products
       await tx.product.deleteMany({
         where: { userId: userId },
       });
 
-      // Delete user's businesses
+      // 5. Delete user's businesses
       await tx.business.deleteMany({
         where: { ownerId: userId },
       });
 
-      // Finally delete the user
+      // 6. Finally delete the user
       await tx.user.delete({
         where: { id: userId },
       });
