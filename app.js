@@ -544,14 +544,11 @@ app.delete("/api/users/:id", async (req, res) => {
     // Check if user exists
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      include: {
-        _count: {
-          select: {
-            businesses: true,
-            products: true,
-            professionals: true,
-          },
-        },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
       },
     });
 
