@@ -105,17 +105,17 @@ app.post("/api/auth/admin/login", async (req, res) => {
 
     // Check if user is ADMIN
     if (user.role !== "ADMIN") {
-      return res.status(403).json({ 
-        error: "Access denied. Admin privileges required." 
+      return res.status(403).json({
+        error: "Access denied. Admin privileges required.",
       });
     }
 
     // Return user data without password
     const { password: _, ...userWithoutPassword } = user;
-    
+
     res.json({
       user: userWithoutPassword,
-      message: "Admin login successful"
+      message: "Admin login successful",
     });
   } catch (error) {
     console.error("Admin login error:", error);
@@ -172,7 +172,9 @@ app.delete("/api/auth/account", async (req, res) => {
       });
     }
 
-    console.log(`🗑️  Starting deletion process for user ID: ${userIdInt} (${user.fullName})`);
+    console.log(
+      `🗑️  Starting deletion process for user ID: ${userIdInt} (${user.fullName})`,
+    );
 
     // Start a transaction to delete all related data atomically
     await prisma.$transaction(async (tx) => {
@@ -354,10 +356,6 @@ const isAdmin = async (userId) => {
 };
 
 app.post("/api/upload", upload.array("images"), async (req, res) => {
-  console.log("[UPLOAD] Receiving file(s) for Cloudinary...");
-  console.log("[UPLOAD] Files received:", req.files?.length);
-  console.log("[UPLOAD] Headers:", req.headers);
-
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: "No image files provided" });
@@ -387,14 +385,14 @@ app.post("/api/upload", upload.array("images"), async (req, res) => {
     const results = await Promise.all(uploadPromises);
 
     console.log(
-      `[UPLOAD] Cloudinary success: ${results.length} files uploaded.`
+      `[UPLOAD] Cloudinary success: ${results.length} files uploaded.`,
     );
 
     res.json(
       results.map((result) => ({
         imageUrl: result.secure_url,
         publicId: result.public_id,
-      }))
+      })),
     );
   } catch (error) {
     console.error("Upload error:", error);
@@ -457,7 +455,7 @@ app.get("/api/users", async (req, res) => {
             professionals: user.professional ? 1 : 0,
           },
         };
-      })
+      }),
     );
 
     res.json(usersWithPlans);
@@ -466,7 +464,6 @@ app.get("/api/users", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
 
 app.get("/api/users/:id", async (req, res) => {
   try {
@@ -641,8 +638,6 @@ app.delete("/api/users/:id", async (req, res) => {
 
 // Multer now uses upload.single() and expects a field named "image"
 app.post("/api/upload/single", upload.single("image"), async (req, res) => {
-  console.log("[UPLOAD] Receiving single file for Cloudinary...");
-
   try {
     if (!req.file) {
       return res.status(400).json({ error: "No image file provided" });
@@ -752,13 +747,13 @@ app.patch("/api/users/:id", isAuthenticated, async (req, res) => {
       "Current User ID from header:",
       currentUserId,
       "Type:",
-      typeof currentUserId
+      typeof currentUserId,
     );
     console.log(
       "Target User ID from URL:",
       userIdToUpdate,
       "Type:",
-      typeof userIdToUpdate
+      typeof userIdToUpdate,
     );
     console.log("Update data:", req.body);
 
@@ -772,13 +767,13 @@ app.patch("/api/users/:id", isAuthenticated, async (req, res) => {
       "Converted Current User ID:",
       currentUserIdNum,
       "Type:",
-      typeof currentUserIdNum
+      typeof currentUserIdNum,
     );
     console.log(
       "Converted Target User ID:",
       userIdToUpdateNum,
       "Type:",
-      typeof userIdToUpdateNum
+      typeof userIdToUpdateNum,
     );
 
     if (isNaN(currentUserIdNum) || isNaN(userIdToUpdateNum)) {
@@ -797,7 +792,7 @@ app.patch("/api/users/:id", isAuthenticated, async (req, res) => {
     }
 
     console.log(
-      "✅ Authorization verified - user can update their own profile"
+      "✅ Authorization verified - user can update their own profile",
     );
 
     // 1. Find the user first
@@ -1021,17 +1016,17 @@ app.get("/api/users/:userId/usage", async (req, res) => {
     }
 
     console.log(
-      `Active plan: ${activePlan.name}, allowed businesses: ${activePlan.allowedBusinesses}, allowed products: ${activePlan.allowedProducts}`
+      `Active plan: ${activePlan.name}, allowed businesses: ${activePlan.allowedBusinesses}, allowed products: ${activePlan.allowedProducts}`,
     );
 
     // Count only ACTIVE or APPROVED businesses/products
     const activeBusinesses = user.businesses.filter(
       (business) =>
-        business.status === "ACTIVE" || business.status === "APPROVED"
+        business.status === "ACTIVE" || business.status === "APPROVED",
     );
 
     const activeProducts = user.products.filter(
-      (product) => product.status === "ACTIVE" || product.status === "APPROVED"
+      (product) => product.status === "ACTIVE" || product.status === "APPROVED",
     );
 
     const usage = {
@@ -1041,7 +1036,7 @@ app.get("/api/users/:userId/usage", async (req, res) => {
         limit: activePlan.allowedBusinesses,
         remaining: Math.max(
           0,
-          activePlan.allowedBusinesses - activeBusinesses.length
+          activePlan.allowedBusinesses - activeBusinesses.length,
         ),
       },
       products: {
@@ -1049,7 +1044,7 @@ app.get("/api/users/:userId/usage", async (req, res) => {
         limit: activePlan.allowedProducts,
         remaining: Math.max(
           0,
-          activePlan.allowedProducts - activeProducts.length
+          activePlan.allowedProducts - activeProducts.length,
         ),
       },
     };
@@ -1389,13 +1384,13 @@ app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
       "User ID from header:",
       currentUserId,
       "Type:",
-      typeof currentUserId
+      typeof currentUserId,
     );
     console.log(
       "Business ID from URL:",
       businessId,
       "Type:",
-      typeof businessId
+      typeof businessId,
     );
     console.log("Update data:", req.body);
 
@@ -1409,13 +1404,13 @@ app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
       "Converted User ID:",
       currentUserIdNum,
       "Type:",
-      typeof currentUserIdNum
+      typeof currentUserIdNum,
     );
     console.log(
       "Converted Business ID:",
       businessIdNum,
       "Type:",
-      typeof businessIdNum
+      typeof businessIdNum,
     );
 
     if (isNaN(currentUserIdNum) || isNaN(businessIdNum)) {
@@ -1515,7 +1510,7 @@ app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
       "User ID from header:",
       currentUserId,
       "Type:",
-      typeof currentUserId
+      typeof currentUserId,
     );
     console.log("Product ID from URL:", productId, "Type:", typeof productId);
     console.log("Update data:", req.body);
@@ -1530,13 +1525,13 @@ app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
       "Converted User ID:",
       currentUserIdNum,
       "Type:",
-      typeof currentUserIdNum
+      typeof currentUserIdNum,
     );
     console.log(
       "Converted Product ID:",
       productIdNum,
       "Type:",
-      typeof productIdNum
+      typeof productIdNum,
     );
 
     if (isNaN(currentUserIdNum) || isNaN(productIdNum)) {
@@ -1976,9 +1971,6 @@ app.get("/api/businesses/:id", async (req, res) => {
   }
 });
 
-
-
-
 app.delete("/api/businesses/:id", async (req, res) => {
   try {
     const numericId = parseInt(req.params.id, 10);
@@ -2057,7 +2049,7 @@ app.get("/api/entity/:type/:id/products", async (req, res) => {
     });
 
     console.log(
-      `[PRODUCTS] Found ${products.length} products for ${entityName} (${type} ${id})`
+      `[PRODUCTS] Found ${products.length} products for ${entityName} (${type} ${id})`,
     );
     res.json(products);
   } catch (error) {
@@ -2299,7 +2291,7 @@ app.get("/api/professionals/approved", async (req, res) => {
         submittedDate: professional.submittedDate,
         createdAt: professional.createdAt,
         updatedAt: professional.updatedAt,
-      })
+      }),
     );
 
     res.status(200).json(formattedProfessionals);
@@ -2359,7 +2351,6 @@ app.delete("/api/professionals/:id", async (req, res) => {
     return res.status(500).json({ error: "Failed to delete professional" });
   }
 });
-
 
 // Get all professionals (for admin)
 app.get("/api/admin/professionals", async (req, res) => {
@@ -2599,7 +2590,7 @@ async function sendUpgradeConfirmation(user, transaction) {
   try {
     // Implement your email service here (SendGrid, AWS SES, etc.)
     console.log(
-      `Upgrade confirmation sent to ${user.email} for plan ${transaction.plan.name}`
+      `Upgrade confirmation sent to ${user.email} for plan ${transaction.plan.name}`,
     );
   } catch (error) {
     console.error("Failed to send upgrade confirmation:", error);
@@ -2646,6 +2637,7 @@ async function verifyAppleReceipt(receiptData) {
 }
 
 // GET - All upgrade requests (for admin)
+// User model has: id, name, email (no phone - use PlanUpgradeRequest.phoneNumber)
 app.get("/api/upgrade-requests", async (req, res) => {
   try {
     const { status } = req.query;
@@ -2659,7 +2651,11 @@ app.get("/api/upgrade-requests", async (req, res) => {
       where,
       include: {
         user: {
-          select: { id: true, name: true, email: true, phone: true },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
         },
         currentPlan: true,
         requestedPlan: true,
@@ -2688,7 +2684,9 @@ app.put("/api/upgrade-requests/:id", async (req, res) => {
       where: { id: parseInt(id) },
       data: { status, adminNotes },
       include: {
-        user: true,
+        user: {
+          select: { id: true, name: true, email: true },
+        },
         currentPlan: true,
         requestedPlan: true,
       },
@@ -2703,7 +2701,7 @@ app.put("/api/upgrade-requests/:id", async (req, res) => {
 
       // Here you can send notification to user about approval
       console.log(
-        `User ${request.userId} plan upgraded to ${request.requestedPlanId}`
+        `User ${request.userId} plan upgraded to ${request.requestedPlanId}`,
       );
     }
 
@@ -2756,8 +2754,6 @@ app.get("/api/admin/upgrade-requests", async (req, res) => {
               id: true,
               name: true,
               email: true,
-              // Remove phone since it doesn't exist in User model
-              // Use phoneNumber from PlanUpgradeRequest instead
             },
           },
         },
@@ -2784,7 +2780,7 @@ app.get("/api/admin/upgrade-requests", async (req, res) => {
           currentPlan,
           requestedPlan,
         };
-      })
+      }),
     );
 
     res.json({
@@ -2815,10 +2811,11 @@ app.get("/api/admin/upgrade-requests/:id", async (req, res) => {
             id: true,
             name: true,
             email: true,
-            // Remove phone since it doesn't exist in User model
             createdAt: true,
           },
         },
+        currentPlan: true,
+        requestedPlan: true,
       },
     });
 
@@ -2891,7 +2888,9 @@ app.put("/api/admin/upgrade-requests/:id/status", async (req, res) => {
     const upgradeRequest = await prisma.planUpgradeRequest.findUnique({
       where: { id: parseInt(id) },
       include: {
-        user: true,
+        user: {
+          select: { id: true, name: true, email: true },
+        },
       },
     });
 
@@ -2916,6 +2915,8 @@ app.put("/api/admin/upgrade-requests/:id/status", async (req, res) => {
         user: {
           select: { id: true, name: true, email: true },
         },
+        currentPlan: true,
+        requestedPlan: true,
       },
     });
 
@@ -2928,7 +2929,7 @@ app.put("/api/admin/upgrade-requests/:id/status", async (req, res) => {
 
       // Create a notification or log the upgrade
       console.log(
-        `User ${upgradeRequest.userId} plan upgraded from ${upgradeRequest.currentPlanId} to ${upgradeRequest.requestedPlanId}`
+        `User ${upgradeRequest.userId} plan upgraded from ${upgradeRequest.currentPlanId} to ${upgradeRequest.requestedPlanId}`,
       );
 
       // Here you can send email/notification to user about approval
@@ -3095,7 +3096,7 @@ app.get("/api/professionals/approved", async (req, res) => {
         submittedDate: professional.submittedDate,
         createdAt: professional.createdAt,
         updatedAt: professional.updatedAt,
-      })
+      }),
     );
 
     res.status(200).json(formattedProfessionals);
