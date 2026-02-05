@@ -1725,12 +1725,27 @@ app.patch("/api/products/:id/status", async (req, res) => {
 });
 
 // Professional routes
+const normalizeProfessionList = (profession) => {
+  if (Array.isArray(profession)) {
+    return profession.map((p) => String(p).trim()).filter(Boolean);
+  }
+  if (typeof profession === "string") {
+    return profession
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
+  }
+  return [];
+};
+
 const validateProfessionalData = (data) => {
   const errors = {};
 
-  if (data.profession.length === 0) {
+  const professions = normalizeProfessionList(data.profession);
+
+  if (professions.length === 0) {
     errors.profession = "At least one profession is required";
-  } else if (data.profession.length > 5) {
+  } else if (professions.length > 5) {
     errors.profession = "Maximum 5 professions allowed";
   }
 
@@ -1772,8 +1787,12 @@ app.post("/api/professionals", async (req, res) => {
     if (validationError) {
       return res.status(400).json({ error: validationError });
     }
+    const professions = normalizeProfessionList(req.body.profession);
     const professional = await prisma.professional.create({
-      data: { ...req.body },
+      data: {
+        ...req.body,
+        profession: professions.join(", "),
+      },
     });
     res.json(professional);
   } catch (error) {
