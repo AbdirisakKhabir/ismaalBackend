@@ -344,6 +344,13 @@ const validatedPlanData = (data) => {
       return `${field} is required`;
     }
   }
+  if (
+    data.billingPeriod &&
+    !["MONTHLY", "YEARLY"].includes(data.billingPeriod)
+  ) {
+    return "billingPeriod must be MONTHLY or YEARLY";
+  }
+
   return null;
 };
 
@@ -886,7 +893,7 @@ app.post("/api/plans", async (req, res) => {
       return res.status(400).json({ error: validationError });
     }
     const business = await prisma.plans.create({
-      data: { ...req.body },
+      data: { ...req.body, billingPeriod: req.body.billingPeriod || "MONTHLY" },
     });
     res.json(business);
   } catch (error) {
@@ -953,7 +960,7 @@ app.put("/api/plans/:id", async (req, res) => {
 
     const plan = await prisma.plans.update({
       where: { id: parseInt(req.params.id) },
-      data: { ...req.body },
+      data: { ...req.body, billingPeriod: req.body.billingPeriod || "MONTHLY" },
     });
 
     res.json(plan);
@@ -1797,6 +1804,63 @@ app.post("/api/professionals", async (req, res) => {
     res.json(professional);
   } catch (error) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+// Update professional profile
+app.patch("/api/professionals/:id", isAuthenticated, async (req, res) => {
+  try {
+    const currentUserId = parseInt(req.userId);
+    const professionalId = parseInt(req.params.id);
+
+    if (isNaN(currentUserId) || isNaN(professionalId)) {
+      return res.status(400).json({ error: "Invalid ID format" });
+    }
+
+    const professional = await prisma.professional.findUnique({
+      where: { id: professionalId },
+    });
+
+    if (!professional) {
+      return res.status(404).json({ error: "Professional not found" });
+    }
+
+    if (professional.userId !== currentUserId) {
+      return res
+        .status(403)
+        .json({ error: "Not authorized to update this profile" });
+    }
+
+    const professions = normalizeProfessionList(req.body.profession);
+    const updateData = {
+      profession: professions.join(", "),
+      specialty: req.body.specialty,
+      experience: req.body.experience,
+      location: req.body.location,
+      phone: req.body.phone,
+      email: req.body.email,
+      description: req.body.description,
+      status: "PENDING",
+      updatedAt: new Date(),
+    };
+
+    const validationError = validateProfessionalData(updateData);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
+
+    const updatedProfile = await prisma.professional.update({
+      where: { id: professionalId },
+      data: updateData,
+    });
+
+    res.json({
+      message: "Professional updated successfully and set to PENDING for review",
+      professional: updatedProfile,
+    });
+  } catch (error) {
+    console.error("Error updating professional:", error);
+    res.status(500).json({ error: error.message });
   }
 });
 
