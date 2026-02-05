@@ -325,16 +325,17 @@ const validatedPlanData = (data) => {
   const required = [
     "name",
     "description",
+    "priceMonthly",
+    "priceYearly",
     "allowedBusinesses",
     "allowedProducts",
     "userId",
     "profile_status",
-    "price",
   ];
 
   for (const field of required) {
-    // Special handling for price since 0 is a valid value but falsy
-    if (field === "price") {
+    // Special handling for prices since 0 is a valid value but falsy
+    if (field === "priceMonthly" || field === "priceYearly") {
       if (data[field] === undefined || data[field] === null) {
         return `${field} is required`;
       }
@@ -344,13 +345,6 @@ const validatedPlanData = (data) => {
       return `${field} is required`;
     }
   }
-  if (
-    data.billingPeriod &&
-    !["MONTHLY", "YEARLY"].includes(data.billingPeriod)
-  ) {
-    return "billingPeriod must be MONTHLY or YEARLY";
-  }
-
   return null;
 };
 
@@ -893,7 +887,12 @@ app.post("/api/plans", async (req, res) => {
       return res.status(400).json({ error: validationError });
     }
     const business = await prisma.plans.create({
-      data: { ...req.body, billingPeriod: req.body.billingPeriod || "MONTHLY" },
+      data: {
+        ...req.body,
+        price: req.body.priceMonthly ?? req.body.price ?? 0,
+        priceMonthly: req.body.priceMonthly ?? req.body.price ?? 0,
+        priceYearly: req.body.priceYearly ?? 0,
+      },
     });
     res.json(business);
   } catch (error) {
@@ -960,7 +959,12 @@ app.put("/api/plans/:id", async (req, res) => {
 
     const plan = await prisma.plans.update({
       where: { id: parseInt(req.params.id) },
-      data: { ...req.body, billingPeriod: req.body.billingPeriod || "MONTHLY" },
+      data: {
+        ...req.body,
+        price: req.body.priceMonthly ?? req.body.price ?? 0,
+        priceMonthly: req.body.priceMonthly ?? req.body.price ?? 0,
+        priceYearly: req.body.priceYearly ?? 0,
+      },
     });
 
     res.json(plan);

@@ -33,7 +33,8 @@ model Plans {
   name              String
   description       String   @db.Text
   price             Decimal  @default(0)
-  billingPeriod     String   @default("MONTHLY")
+  priceMonthly      Decimal  @default(0)
+  priceYearly       Decimal  @default(0)
   allowedBusinesses Int      @default(1)
   allowedProducts   Int      @default(1)
   users             User[] // Inverse relation
