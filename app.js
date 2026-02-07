@@ -22,6 +22,17 @@ const upload = multer({ storage: multer.memoryStorage() });
 app.use(cors());
 app.use(express.json());
 
+// App version config (in-memory; replace with DB if needed)
+let appVersionConfig = {
+  latestVersion: "1.0.0",
+  minVersion: "1.0.0",
+  androidUrl: "",
+  iosUrl: "",
+  forceUpdate: false,
+  releaseNotes: "",
+  updatedAt: new Date().toISOString(),
+};
+
 app.post("/api/auth/register", async (req, res) => {
   try {
     const { email, password, name } = req.body;
@@ -77,6 +88,40 @@ app.post("/api/auth/login", async (req, res) => {
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
+});
+
+// App version endpoints
+app.get("/api/app-version", (req, res) => {
+  res.json(appVersionConfig);
+});
+
+app.put("/api/app-version", (req, res) => {
+  const {
+    latestVersion,
+    minVersion,
+    androidUrl,
+    iosUrl,
+    forceUpdate,
+    releaseNotes,
+  } = req.body || {};
+
+  if (!latestVersion || !minVersion) {
+    return res.status(400).json({
+      error: "latestVersion and minVersion are required",
+    });
+  }
+
+  appVersionConfig = {
+    latestVersion,
+    minVersion,
+    androidUrl: androidUrl || "",
+    iosUrl: iosUrl || "",
+    forceUpdate: Boolean(forceUpdate),
+    releaseNotes: releaseNotes || "",
+    updatedAt: new Date().toISOString(),
+  };
+
+  res.json(appVersionConfig);
 });
 
 // Admin Login - Only allows users with ADMIN role
