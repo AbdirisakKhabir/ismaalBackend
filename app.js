@@ -1817,10 +1817,15 @@ const validateProfessionalData = (data) => {
     errors.location = "Location is required";
   }
 
-  if (!data.phone?.trim()) {
+  const phoneRaw = String(data.phone || "").trim();
+  const phoneNormalized = phoneRaw.replace(/\s+/g, "");
+  if (!phoneNormalized) {
     errors.phone = "Phone number is required";
-  } else if (!/^\d{5,15}$/.test(data.phone)) {
-    errors.phone = "Please enter a valid phone number (digits only)";
+  } else if (!/^\+?\d{5,15}$/.test(phoneNormalized)) {
+    errors.phone =
+      "Please enter a valid phone number (digits only, optional +)";
+  } else {
+    data.phone = phoneNormalized;
   }
 
   if (!data.email?.trim()) {
