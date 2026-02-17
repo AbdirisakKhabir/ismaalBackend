@@ -20,12 +20,13 @@ model User {
   updatedAt DateTime @updatedAt
 
   // Relations
-  businesses         Business[]
-  plan               Plans?               @relation(fields: [plan_id], references: [id]) // Single relation
-  products           Product[]
-  professional       Professional?
-  PlanUpgradeRequest PlanUpgradeRequest[]
-  transactions       Transaction[]
+  businesses            Business[]
+  plan                  Plans?               @relation(fields: [plan_id], references: [id]) // Single relation
+  products              Product[]
+  professional          Professional?
+  PlanUpgradeRequest    PlanUpgradeRequest[]
+  transactions          Transaction[]
+  passwordResetTokens   PasswordResetToken[]
 }
 
 model Plans {
@@ -138,6 +139,27 @@ model Professional {
   submittedDate DateTime @default(now())
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+}
+
+model PasswordResetToken {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  token     String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("password_reset_tokens")
+}
+
+model SystemConfig {
+  id    Int    @id @default(autoincrement())
+  key   String @unique
+  value String @db.Text
+
+  @@map("system_config")
 }
 
 enum Role {

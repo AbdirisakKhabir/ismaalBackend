@@ -2,6 +2,8 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
+const nodemailer = require("nodemailer");
 const { PrismaClient } = require("@prisma/client");
 // In your backend - api/upload.js
 const cloudinary = require("cloudinary").v2;
@@ -90,9 +92,238 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
+// --- Email Config (from DB or env, default: ismaalnet@gmail.com) ---
+async function getEmailConfig() {
+  try {
+    const config = await prisma.systemConfig.findUnique({
+      where: { key: "email_config" },
+    });
+    if (config && config.value) {
+      return JSON.parse(config.value);
+    }
+  } catch (e) {
+    console.warn("Email config from DB failed, using env:", e.message);
+  }
+  return {
+    fromEmail: process.env.EMAIL_FROM || "ismaalnet@gmail.com",
+    smtpHost: process.env.SMTP_HOST || "smtp.gmail.com",
+    smtpPort: parseInt(process.env.SMTP_PORT || "587", 10),
+    smtpUser: process.env.SMTP_USER || "ismaalnet@gmail.com",
+    smtpPass: process.env.SMTP_PASS || "",
+    resetBaseUrl: process.env.RESET_PASSWORD_URL || "https://ismaal.taamsolutions.net",
+  };
+}
+
+function createEmailTransporter(config) {
+  return nodemailer.createTransport({
+    host: config.smtpHost,
+    port: config.smtpPort,
+    secure: config.smtpPort === 465,
+    auth: config.smtpUser && config.smtpPass ? {
+      user: config.smtpUser,
+      pass: config.smtpPass,
+    } : undefined,
+  });
+}
+
+// POST /api/auth/forgot-password
+app.post("/api/auth/forgot-password", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email || !String(email).trim()) {
+      return res.status(400).json({ error: "Email is required" });
+    }
+    const normalizedEmail = String(email).trim().toLowerCase();
+    if (!normalizedEmail.includes("@")) {
+      return res.status(400).json({ error: "Invalid email format" });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
+
+    // Always return success to avoid revealing if email exists (security)
+    const successMessage =
+      "If an account exists with this email, you will receive a password reset link shortly. Please check your inbox and spam folder.";
+
+    if (!user) {
+      return res.json({ success: true, message: successMessage });
+    }
+
+    const emailConfig = await getEmailConfig();
+    if (!emailConfig.smtpPass) {
+      console.error("SMTP_PASS or email config not set. Cannot send reset email.");
+      return res.json({ success: true, message: successMessage });
+    }
+
+    const token = crypto.randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    await prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        token,
+        expiresAt,
+      },
+    });
+
+    const resetLink = `${emailConfig.resetBaseUrl}/reset-password?token=${token}`;
+
+    const transporter = createEmailTransporter(emailConfig);
+    await transporter.sendMail({
+      from: `"Ismaal" <${emailConfig.fromEmail}>`,
+      to: user.email,
+      subject: "Reset Your Password - Ismaal",
+      html: `
+        <p>Hello ${user.name || "User"},</p>
+        <p>You requested a password reset for your Ismaal account.</p>
+        <p>Click the link below to reset your password (valid for 1 hour):</p>
+        <p><a href="${resetLink}">${resetLink}</a></p>
+        <p>If you did not request this, please ignore this email.</p>
+        <p>— Ismaal Team</p>
+      `,
+      text: `Reset your password: ${resetLink}`,
+    });
+
+    return res.json({ success: true, message: successMessage });
+  } catch (error) {
+    console.error("Forgot password error:", error);
+    return res.json({
+      success: true,
+      message:
+        "If an account exists with this email, you will receive a password reset link shortly.",
+    });
+  }
+});
+
+// POST /api/auth/reset-password
+app.post("/api/auth/reset-password", async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    if (!token || !newPassword) {
+      return res.status(400).json({ error: "Token and new password are required" });
+    }
+    if (String(newPassword).length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters" });
+    }
+
+    const resetToken = await prisma.passwordResetToken.findUnique({
+      where: { token },
+      include: { user: true },
+    });
+
+    if (!resetToken) {
+      return res.status(400).json({ error: "Invalid or expired reset link" });
+    }
+    if (resetToken.used) {
+      return res.status(400).json({ error: "This reset link has already been used" });
+    }
+    if (new Date() > resetToken.expiresAt) {
+      return res.status(400).json({ error: "Reset link has expired" });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: resetToken.userId },
+        data: { password: hashedPassword },
+      }),
+      prisma.passwordResetToken.update({
+        where: { id: resetToken.id },
+        data: { used: true },
+      }),
+    ]);
+
+    return res.json({
+      success: true,
+      message: "Password has been reset successfully. You can now log in.",
+    });
+  } catch (error) {
+    console.error("Reset password error:", error);
+    res.status(500).json({ error: "Failed to reset password" });
+  }
+});
+
 // App version endpoints
 app.get("/api/app-version", (req, res) => {
   res.json(appVersionConfig);
+});
+
+// GET /api/admin/email-config (Admin only)
+app.get("/api/admin/email-config", async (req, res) => {
+  try {
+    const userId = req.headers["x-user-id"];
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    const adminUser = await prisma.user.findUnique({
+      where: { id: parseInt(userId) },
+      select: { role: true },
+    });
+    if (!adminUser || adminUser.role !== "ADMIN") {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const config = await getEmailConfig();
+    res.json({
+      fromEmail: config.fromEmail,
+      smtpHost: config.smtpHost,
+      smtpPort: config.smtpPort,
+      smtpUser: config.smtpUser,
+      smtpPassMasked: config.smtpPass ? "********" : "",
+      resetBaseUrl: config.resetBaseUrl,
+    });
+  } catch (error) {
+    console.error("Get email config error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/admin/email-config (Admin only)
+app.put("/api/admin/email-config", async (req, res) => {
+  try {
+    const userId = req.headers["x-user-id"];
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    const adminUser = await prisma.user.findUnique({
+      where: { id: parseInt(userId) },
+      select: { role: true },
+    });
+    if (!adminUser || adminUser.role !== "ADMIN") {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const { fromEmail, smtpHost, smtpPort, smtpUser, smtpPass, resetBaseUrl } = req.body || {};
+    const current = await getEmailConfig();
+    const updated = {
+      fromEmail: fromEmail ?? current.fromEmail,
+      smtpHost: smtpHost ?? current.smtpHost,
+      smtpPort: smtpPort ?? current.smtpPort,
+      smtpUser: smtpUser ?? current.smtpUser,
+      smtpPass: smtpPass !== undefined && smtpPass !== "" ? smtpPass : current.smtpPass,
+      resetBaseUrl: resetBaseUrl ?? current.resetBaseUrl,
+    };
+
+    await prisma.systemConfig.upsert({
+      where: { key: "email_config" },
+      create: { key: "email_config", value: JSON.stringify(updated) },
+      update: { value: JSON.stringify(updated) },
+    });
+
+    res.json({
+      success: true,
+      fromEmail: updated.fromEmail,
+      smtpHost: updated.smtpHost,
+      smtpPort: updated.smtpPort,
+      smtpUser: updated.smtpUser,
+      smtpPassMasked: updated.smtpPass ? "********" : "",
+      resetBaseUrl: updated.resetBaseUrl,
+    });
+  } catch (error) {
+    console.error("Update email config error:", error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.put("/api/app-version", (req, res) => {
@@ -781,6 +1012,21 @@ const validateUpdateData = (data) => {
   return null;
 };
 
+const normalizeImageField = (image) => {
+  if (Array.isArray(image)) {
+    return image.map((url) => String(url).trim()).filter(Boolean).join(", ");
+  }
+  if (typeof image === "string") {
+    return image
+      .split(",")
+      .map((url) => url.trim())
+      .filter(Boolean)
+      .join(", ");
+  }
+  if (image === "") return "";
+  return undefined;
+};
+
 // --- 🌟 UPDATED UPDATE USER API ROUTE 🌟 ---
 // Backend endpoint for PATCH /api/users/:id
 app.patch("/api/users/:id", isAuthenticated, async (req, res) => {
@@ -1450,7 +1696,9 @@ app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
     );
     console.log("Update data:", req.body);
 
-    const { name, description, category, phone, email, location } = req.body;
+    const { name, description, category, phone, email, location, image } =
+      req.body;
+    const normalizedImage = normalizeImageField(image);
 
     // Convert IDs to numbers to match Prisma schema
     const currentUserIdNum = parseInt(currentUserId);
@@ -1513,6 +1761,9 @@ app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
       status: "PENDING", // Reset to pending for admin review
       updatedAt: new Date(),
     };
+    if (normalizedImage !== undefined) {
+      updateData.image = normalizedImage;
+    }
 
     console.log("📝 Final update data:", updateData);
 
@@ -1571,7 +1822,8 @@ app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
     console.log("Product ID from URL:", productId, "Type:", typeof productId);
     console.log("Update data:", req.body);
 
-    const { name, description, price, category, location } = req.body;
+    const { name, description, price, category, location, image } = req.body;
+    const normalizedImage = normalizeImageField(image);
 
     // Convert IDs to numbers to match Prisma schema
     const currentUserIdNum = parseInt(currentUserId);
@@ -1633,6 +1885,9 @@ app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
       status: "PENDING", // Reset to pending for admin review
       updatedAt: new Date(),
     };
+    if (normalizedImage !== undefined) {
+      updateData.image = normalizedImage;
+    }
 
     console.log("📝 Final update data:", updateData);
 
@@ -1718,21 +1973,23 @@ app.patch("/api/businesses/:id/status", async (req, res) => {
 });
 
 const processProductData = (product) => {
+  const base = {
+    ...product,
+    city: product.location || null,
+  };
   if (product.image && typeof product.image === "string") {
-    // Split the comma-separated string into an array of URLs, trimming whitespace
     const imagesArray = product.image
       .split(",")
       .map((url) => url.trim())
       .filter((url) => url.length > 0);
     return {
-      ...product,
-      images: imagesArray, // New field with array of URLs
-      primaryImage: imagesArray[0] || null, // Optional: for quick access to the main image
-      // We keep the original 'image' field for compatibility, but the client should use 'images' or 'primaryImage'
+      ...base,
+      images: imagesArray,
+      primaryImage: imagesArray[0] || null,
     };
   }
   return {
-    ...product,
+    ...base,
     images: [],
     primaryImage: null,
   };
@@ -1886,6 +2143,7 @@ app.patch("/api/professionals/:id", isAuthenticated, async (req, res) => {
     }
 
     const professions = normalizeProfessionList(req.body.profession);
+    const normalizedImage = normalizeImageField(req.body.image);
     const updateData = {
       profession: professions.join(", "),
       specialty: req.body.specialty,
@@ -1897,6 +2155,9 @@ app.patch("/api/professionals/:id", isAuthenticated, async (req, res) => {
       status: "PENDING",
       updatedAt: new Date(),
     };
+    if (normalizedImage !== undefined) {
+      updateData.image = normalizedImage;
+    }
 
     const validationError = validateProfessionalData(updateData);
     if (validationError) {
@@ -3181,7 +3442,6 @@ app.get("/api/users/:userId/businesses", async (req, res) => {
   try {
     const businesses = await prisma.business.findMany({
       where: { ownerId: userId },
-      // Select fields to return to minimize data transfer
       select: {
         id: true,
         name: true,
@@ -3195,13 +3455,7 @@ app.get("/api/users/:userId/businesses", async (req, res) => {
       },
     });
 
-    // You might want to process the image field here if it's stored as a comma-separated string
-    const processedBusinesses = businesses.map((b) => ({
-      ...b,
-      image: b.image ? b.image.split(",")[0].trim() : null,
-    }));
-
-    res.json(processedBusinesses);
+    res.json(businesses);
   } catch (error) {
     console.error("Error fetching user businesses:", error);
     res.status(500).json({ error: "Failed to fetch user businesses." });
