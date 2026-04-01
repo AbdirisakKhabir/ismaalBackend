@@ -37,7 +37,7 @@ let appVersionConfig = {
 
 app.post("/api/auth/register", async (req, res) => {
   try {
-    const { email, password, name } = req.body;
+    const { email, password, name, phone } = req.body;
     if (!email || !password || !name) {
       return res.status(400).json({ error: "All fields are required" });
     }
@@ -51,14 +51,13 @@ app.post("/api/auth/register", async (req, res) => {
     // 2. Hash the password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // 3. Create the user. The 'status' field will automatically be set to 'PENDING'
-    // because of the @default(PENDING) annotation in the Prisma schema.
+    // 3. Create the user
     const user = await prisma.user.create({
       data: {
         email,
         password: hashedPassword,
         name,
-        // No need to explicitly set status, Prisma handles the default
+        phone: phone || null,
       },
     });
 
@@ -756,6 +755,8 @@ app.get("/api/users/:id", async (req, res) => {
         id: true,
         name: true,
         email: true,
+        phone: true,
+        location: true,
         role: true,
         plan_id: true,
         createdAt: true,
@@ -1103,13 +1104,12 @@ app.patch("/api/users/:id", isAuthenticated, async (req, res) => {
       name: existingUser.name,
     });
 
-    // 2. Prepare update data
+    // 2. Prepare update data (Prisma updates `updatedAt` via @updatedAt on the model)
     const updateData = {
       ...(name !== undefined && { name }),
       ...(email !== undefined && { email }),
       ...(phone !== undefined && { phone }),
       ...(location !== undefined && { location }),
-      updatedAt: new Date(),
     };
 
     // Handle password hashing if provided
