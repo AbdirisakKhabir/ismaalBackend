@@ -42,8 +42,15 @@ app.post("/api/auth/register", async (req, res) => {
       return res.status(400).json({ error: "All fields are required" });
     }
 
-    // 1. Check for existing user
-    const existingUser = await prisma.user.findUnique({ where: { email } });
+    const normalizedEmail = String(email).trim().toLowerCase();
+    if (!normalizedEmail.includes("@")) {
+      return res.status(400).json({ error: "Invalid email format" });
+    }
+
+    // 1. Check for existing user (email stored lowercase — matches login)
+    const existingUser = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
     if (existingUser) {
       return res.status(400).json({ error: "Email already registered" });
     }
@@ -51,22 +58,27 @@ app.post("/api/auth/register", async (req, res) => {
     // 2. Hash the password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // 3. Create the user
+    // 3. Create the user (store email lowercase so login/register stay consistent)
     const user = await prisma.user.create({
       data: {
-        email,
+        email: normalizedEmail,
         password: hashedPassword,
-        name,
-        phone: phone || null,
+        name: String(name).trim(),
+        phone: phone != null && String(phone).trim() ? String(phone).trim() : null,
       },
     });
 
-    // 4. Send response (excluding the password)
+    // 4. Send response (excluding the password) — flat user object with id for mobile clients
     const { password: _, ...userWithoutPassword } = user;
-    res.json(userWithoutPassword);
+    res.status(201).json(userWithoutPassword);
   } catch (error) {
     console.error("Registration error:", error);
-    res.status(400).json({ error: error.message });
+    if (error.code === "P2002") {
+      return res.status(400).json({ error: "Email already registered" });
+    }
+    res.status(500).json({
+      error: "Registration failed. Please try again later.",
+    });
   }
 });
 
@@ -76,7 +88,20 @@ app.post("/api/auth/login", async (req, res) => {
     if (!email || !password) {
       return res.status(400).json({ error: "Email and password are required" });
     }
-    const user = await prisma.user.findUnique({ where: { email } });
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+    let user = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
+    // Legacy rows may have mixed-case email; match case-insensitively via LOWER()
+    if (!user) {
+      const rows = await prisma.$queryRaw`
+        SELECT id FROM User WHERE LOWER(email) = ${normalizedEmail} LIMIT 1`;
+      const legacyId = rows?.[0]?.id;
+      if (legacyId != null) {
+        user = await prisma.user.findUnique({ where: { id: Number(legacyId) } });
+      }
+    }
     if (!user) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
@@ -87,7 +112,8 @@ app.post("/api/auth/login", async (req, res) => {
     const { password: _, ...userWithoutPassword } = user;
     res.json(userWithoutPassword);
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    console.error("Login error:", error);
+    res.status(500).json({ error: "Login failed. Please try again later." });
   }
 });
 
