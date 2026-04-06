@@ -135,7 +135,7 @@ model Professional {
   location      String
   phone         String
   email         String
-  description   String? // Add this line (optional field)
+  description   String? @db.Text // Long text; default String maps to VARCHAR(191) on MySQL and truncates long bios
   image         String?
   status        Status   @default(PENDING)
   submittedDate DateTime @default(now())

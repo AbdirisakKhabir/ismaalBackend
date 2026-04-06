@@ -2132,10 +2132,27 @@ app.post("/api/professionals", async (req, res) => {
       return res.status(400).json({ error: validationError });
     }
     const professions = normalizeProfessionList(req.body.profession);
+    const body = req.body;
+    const descriptionNormalized =
+      body.description == null || String(body.description).trim() === ""
+        ? null
+        : String(body.description).slice(0, 1000);
+
     const professional = await prisma.professional.create({
       data: {
-        ...req.body,
+        userId:
+          typeof body.userId === "string"
+            ? parseInt(body.userId, 10)
+            : body.userId,
         profession: professions.join(", "),
+        specialty: body.specialty,
+        experience: body.experience,
+        location: body.location,
+        phone: body.phone,
+        email: body.email,
+        image: body.image ?? null,
+        description: descriptionNormalized,
+        status: body.status ?? "PENDING",
       },
     });
     res.json(professional);
@@ -2170,6 +2187,11 @@ app.patch("/api/professionals/:id", isAuthenticated, async (req, res) => {
 
     const professions = normalizeProfessionList(req.body.profession);
     const normalizedImage = normalizeImageField(req.body.image);
+    const rawDesc = req.body.description;
+    const descriptionNormalized =
+      rawDesc == null || String(rawDesc).trim() === ""
+        ? null
+        : String(rawDesc).slice(0, 1000);
     const updateData = {
       profession: professions.join(", "),
       specialty: req.body.specialty,
@@ -2177,7 +2199,7 @@ app.patch("/api/professionals/:id", isAuthenticated, async (req, res) => {
       location: req.body.location,
       phone: req.body.phone,
       email: req.body.email,
-      description: req.body.description,
+      description: descriptionNormalized,
       status: "PENDING",
       updatedAt: new Date(),
     };
