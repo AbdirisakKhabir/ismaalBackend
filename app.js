@@ -380,6 +380,300 @@ app.put("/api/app-version", (req, res) => {
   res.json(appVersionConfig);
 });
 
+// --- Lookup: cities & categories (public read, admin CRUD) ---
+const LOOKUP_CATEGORY_TYPES = new Set(["business", "product", "profession"]);
+
+async function getAdminUserOrError(req) {
+  const userIdRaw = req.headers["x-user-id"];
+  if (!userIdRaw) {
+    return { status: 401, error: "Authentication required" };
+  }
+  const userId = parseInt(String(userIdRaw), 10);
+  if (Number.isNaN(userId) || userId <= 0) {
+    return { status: 401, error: "Authentication required" };
+  }
+  const adminUser = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { role: true },
+  });
+  if (!adminUser || adminUser.role !== "ADMIN") {
+    return { status: 403, error: "Admin access required" };
+  }
+  return { userId };
+}
+
+// Public (mobile app & site)
+app.get("/api/cities", async (req, res) => {
+  try {
+    const rows = await prisma.lookupCity.findMany({
+      where: { active: true },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    });
+    res.json(rows);
+  } catch (error) {
+    console.error("GET /api/cities", error);
+    res.status(500).json({ error: "Failed to load cities" });
+  }
+});
+
+app.get("/api/categories", async (req, res) => {
+  try {
+    const type = String(req.query.type || "").toLowerCase();
+    if (!LOOKUP_CATEGORY_TYPES.has(type)) {
+      return res.status(400).json({
+        error:
+          "Query parameter type is required and must be business, product, or profession",
+      });
+    }
+    const rows = await prisma.lookupCategory.findMany({
+      where: { type, active: true },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    });
+    res.json(rows);
+  } catch (error) {
+    console.error("GET /api/categories", error);
+    res.status(500).json({ error: "Failed to load categories" });
+  }
+});
+
+// Admin — cities
+app.get("/api/admin/cities", async (req, res) => {
+  try {
+    const auth = await getAdminUserOrError(req);
+    if (auth.error) {
+      return res.status(auth.status).json({ error: auth.error });
+    }
+    const includeInactive =
+      req.query.includeInactive === "1" || req.query.includeInactive === "true";
+    const rows = await prisma.lookupCity.findMany({
+      where: includeInactive ? {} : { active: true },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    });
+    res.json(rows);
+  } catch (error) {
+    console.error("GET /api/admin/cities", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/cities", async (req, res) => {
+  try {
+    const auth = await getAdminUserOrError(req);
+    if (auth.error) {
+      return res.status(auth.status).json({ error: auth.error });
+    }
+    const { name, sortOrder, active } = req.body || {};
+    const trimmed = String(name || "").trim();
+    if (!trimmed) {
+      return res.status(400).json({ error: "name is required" });
+    }
+    const row = await prisma.lookupCity.create({
+      data: {
+        name: trimmed,
+        sortOrder: Number.isFinite(Number(sortOrder)) ? Number(sortOrder) : 0,
+        active: active !== false,
+      },
+    });
+    res.status(201).json(row);
+  } catch (error) {
+    if (error.code === "P2002") {
+      return res.status(400).json({ error: "A city with this name already exists" });
+    }
+    console.error("POST /api/admin/cities", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put("/api/admin/cities/:id", async (req, res) => {
+  try {
+    const auth = await getAdminUserOrError(req);
+    if (auth.error) {
+      return res.status(auth.status).json({ error: auth.error });
+    }
+    const id = parseInt(req.params.id, 10);
+    if (Number.isNaN(id)) {
+      return res.status(400).json({ error: "Invalid id" });
+    }
+    const { name, sortOrder, active } = req.body || {};
+    const data = {};
+    if (name !== undefined) data.name = String(name).trim();
+    if (sortOrder !== undefined) {
+      data.sortOrder = Number.isFinite(Number(sortOrder)) ? Number(sortOrder) : 0;
+    }
+    if (active !== undefined) data.active = Boolean(active);
+    if (data.name === "") {
+      return res.status(400).json({ error: "name cannot be empty" });
+    }
+    const row = await prisma.lookupCity.update({
+      where: { id },
+      data,
+    });
+    res.json(row);
+  } catch (error) {
+    if (error.code === "P2025") {
+      return res.status(404).json({ error: "City not found" });
+    }
+    if (error.code === "P2002") {
+      return res.status(400).json({ error: "A city with this name already exists" });
+    }
+    console.error("PUT /api/admin/cities/:id", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/admin/cities/:id", async (req, res) => {
+  try {
+    const auth = await getAdminUserOrError(req);
+    if (auth.error) {
+      return res.status(auth.status).json({ error: auth.error });
+    }
+    const id = parseInt(req.params.id, 10);
+    if (Number.isNaN(id)) {
+      return res.status(400).json({ error: "Invalid id" });
+    }
+    await prisma.lookupCity.delete({ where: { id } });
+    res.json({ success: true });
+  } catch (error) {
+    if (error.code === "P2025") {
+      return res.status(404).json({ error: "City not found" });
+    }
+    console.error("DELETE /api/admin/cities/:id", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin — categories
+app.get("/api/admin/categories", async (req, res) => {
+  try {
+    const auth = await getAdminUserOrError(req);
+    if (auth.error) {
+      return res.status(auth.status).json({ error: auth.error });
+    }
+    const type = String(req.query.type || "").toLowerCase();
+    if (!LOOKUP_CATEGORY_TYPES.has(type)) {
+      return res.status(400).json({
+        error: "Query parameter type is required (business, product, or profession)",
+      });
+    }
+    const includeInactive =
+      req.query.includeInactive === "1" || req.query.includeInactive === "true";
+    const rows = await prisma.lookupCategory.findMany({
+      where: includeInactive ? { type } : { type, active: true },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    });
+    res.json(rows);
+  } catch (error) {
+    console.error("GET /api/admin/categories", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/categories", async (req, res) => {
+  try {
+    const auth = await getAdminUserOrError(req);
+    if (auth.error) {
+      return res.status(auth.status).json({ error: auth.error });
+    }
+    const { name, type, sortOrder, active } = req.body || {};
+    const t = String(type || "").toLowerCase();
+    if (!LOOKUP_CATEGORY_TYPES.has(t)) {
+      return res.status(400).json({
+        error: "type must be business, product, or profession",
+      });
+    }
+    const trimmed = String(name || "").trim();
+    if (!trimmed) {
+      return res.status(400).json({ error: "name is required" });
+    }
+    const row = await prisma.lookupCategory.create({
+      data: {
+        name: trimmed,
+        type: t,
+        sortOrder: Number.isFinite(Number(sortOrder)) ? Number(sortOrder) : 0,
+        active: active !== false,
+      },
+    });
+    res.status(201).json(row);
+  } catch (error) {
+    if (error.code === "P2002") {
+      return res
+        .status(400)
+        .json({ error: "A category with this name already exists for this type" });
+    }
+    console.error("POST /api/admin/categories", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put("/api/admin/categories/:id", async (req, res) => {
+  try {
+    const auth = await getAdminUserOrError(req);
+    if (auth.error) {
+      return res.status(auth.status).json({ error: auth.error });
+    }
+    const id = parseInt(req.params.id, 10);
+    if (Number.isNaN(id)) {
+      return res.status(400).json({ error: "Invalid id" });
+    }
+    const { name, type, sortOrder, active } = req.body || {};
+    const data = {};
+    if (name !== undefined) data.name = String(name).trim();
+    if (type !== undefined) {
+      const t = String(type).toLowerCase();
+      if (!LOOKUP_CATEGORY_TYPES.has(t)) {
+        return res.status(400).json({
+          error: "type must be business, product, or profession",
+        });
+      }
+      data.type = t;
+    }
+    if (sortOrder !== undefined) {
+      data.sortOrder = Number.isFinite(Number(sortOrder)) ? Number(sortOrder) : 0;
+    }
+    if (active !== undefined) data.active = Boolean(active);
+    if (data.name === "") {
+      return res.status(400).json({ error: "name cannot be empty" });
+    }
+    const row = await prisma.lookupCategory.update({
+      where: { id },
+      data,
+    });
+    res.json(row);
+  } catch (error) {
+    if (error.code === "P2025") {
+      return res.status(404).json({ error: "Category not found" });
+    }
+    if (error.code === "P2002") {
+      return res
+        .status(400)
+        .json({ error: "A category with this name already exists for this type" });
+    }
+    console.error("PUT /api/admin/categories/:id", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/admin/categories/:id", async (req, res) => {
+  try {
+    const auth = await getAdminUserOrError(req);
+    if (auth.error) {
+      return res.status(auth.status).json({ error: auth.error });
+    }
+    const id = parseInt(req.params.id, 10);
+    if (Number.isNaN(id)) {
+      return res.status(400).json({ error: "Invalid id" });
+    }
+    await prisma.lookupCategory.delete({ where: { id } });
+    res.json({ success: true });
+  } catch (error) {
+    if (error.code === "P2025") {
+      return res.status(404).json({ error: "Category not found" });
+    }
+    console.error("DELETE /api/admin/categories/:id", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Admin Login - Only allows users with ADMIN role
 app.post("/api/auth/admin/login", async (req, res) => {
   try {
@@ -630,7 +924,6 @@ const validatedPlanData = (data) => {
     "priceYearly",
     "allowedBusinesses",
     "allowedProducts",
-    "userId",
     "profile_status",
   ];
 
@@ -645,6 +938,12 @@ const validatedPlanData = (data) => {
     else if (!data[field]) {
       return `${field} is required`;
     }
+  }
+  if (
+    data.allowProfessionalPublish !== undefined &&
+    typeof data.allowProfessionalPublish !== "boolean"
+  ) {
+    return "allowProfessionalPublish must be a boolean";
   }
   return null;
 };
@@ -2201,6 +2500,7 @@ app.patch("/api/professionals/:id", isAuthenticated, async (req, res) => {
       email: req.body.email,
       description: descriptionNormalized,
       status: "PENDING",
+      published: false,
       updatedAt: new Date(),
     };
     if (normalizedImage !== undefined) {
@@ -2528,6 +2828,7 @@ app.get("/api/professionals/user/:userId", async (req, res) => {
         experience: true,
         location: true,
         status: true,
+        published: true,
         createdAt: true,
       },
       orderBy: {
@@ -2676,10 +2977,27 @@ app.put("/api/products/:id/approve", async (req, res) => {
 app.put("/api/professionals/:id/approve", async (req, res) => {
   try {
     const { id } = req.params;
+    const pid = parseInt(id, 10);
+
+    const existing = await prisma.professional.findUnique({
+      where: { id: pid },
+      include: {
+        user: { include: { plan: true } },
+      },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: "Professional not found" });
+    }
+
+    const allowPub = existing.user?.plan?.allowProfessionalPublish === true;
 
     const professional = await prisma.professional.update({
-      where: { id: parseInt(id) },
-      data: { status: "APPROVED" },
+      where: { id: pid },
+      data: {
+        status: "APPROVED",
+        published: allowPub,
+      },
     });
 
     res.json(professional);
@@ -2706,13 +3024,18 @@ app.put("/api/products/:id/reject", async (req, res) => {
 
 app.get("/api/professionals/approved", async (req, res) => {
   try {
-    // 💡 FIX 1: Query the 'professional' model, not the 'user' model.
     const approvedProfessionals = await prisma.professional.findMany({
-      // 💡 FIX 2: Filter by status on the Professional model.
-      // Assuming APPROVED is the correct status value based on the request logic.
-      where: { status: "APPROVED" },
-
-      // 💡 FIX 3: Include the related 'user' data for name/email.
+      where: {
+        status: "APPROVED",
+        published: true,
+        user: {
+          is: {
+            plan: {
+              is: { allowProfessionalPublish: true },
+            },
+          },
+        },
+      },
       include: {
         user: { select: { id: true, name: true, email: true } },
       },
@@ -2723,7 +3046,6 @@ app.get("/api/professionals/approved", async (req, res) => {
       (professional) => ({
         id: professional.id,
         userId: professional.userId,
-        // The user data is now accessed correctly through the included 'user' object
         userName: professional.user.name,
         userEmail: professional.user.email,
         profession: professional.profession,
@@ -2734,6 +3056,7 @@ app.get("/api/professionals/approved", async (req, res) => {
         email: professional.email,
         image: professional.image,
         status: professional.status,
+        published: professional.published,
         submittedDate: professional.submittedDate,
         createdAt: professional.createdAt,
         updatedAt: professional.updatedAt,
@@ -2743,10 +3066,94 @@ app.get("/api/professionals/approved", async (req, res) => {
     res.status(200).json(formattedProfessionals);
   } catch (error) {
     console.error("❌ Error fetching approved professionals:", error);
-    // You can log the full error for better debugging in the console
-    // console.error(error);
     res.status(500).json({ error: "Failed to fetch approved professionals" });
   }
+});
+
+// Publish professional profile (subscription-gated). Business/Product cannot use this.
+app.post("/api/professionals/:id/publish", isAuthenticated, async (req, res) => {
+  try {
+    const profId = parseInt(req.params.id, 10);
+    const userId = parseInt(req.headers["x-user-id"], 10);
+    if (isNaN(profId) || isNaN(userId)) {
+      return res.status(400).json({ error: "Invalid id" });
+    }
+
+    const professional = await prisma.professional.findUnique({
+      where: { id: profId },
+      include: { user: { include: { plan: true } } },
+    });
+
+    if (!professional) {
+      return res.status(404).json({ error: "Professional not found" });
+    }
+    if (professional.userId !== userId) {
+      return res.status(403).json({ error: "Not allowed to modify this profile" });
+    }
+    if (professional.status !== "APPROVED") {
+      return res
+        .status(400)
+        .json({ error: "Profile must be approved before it can be published" });
+    }
+    if (!professional.user?.plan?.allowProfessionalPublish) {
+      return res.status(403).json({
+        error:
+          "Your subscription plan does not include publishing a professional profile in the directory.",
+      });
+    }
+
+    const updated = await prisma.professional.update({
+      where: { id: profId },
+      data: { published: true },
+    });
+    res.json({ success: true, professional: updated });
+  } catch (error) {
+    console.error("Publish professional error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/professionals/:id/unpublish", isAuthenticated, async (req, res) => {
+  try {
+    const profId = parseInt(req.params.id, 10);
+    const userId = parseInt(req.headers["x-user-id"], 10);
+    if (isNaN(profId) || isNaN(userId)) {
+      return res.status(400).json({ error: "Invalid id" });
+    }
+
+    const professional = await prisma.professional.findUnique({
+      where: { id: profId },
+    });
+    if (!professional) {
+      return res.status(404).json({ error: "Professional not found" });
+    }
+    if (professional.userId !== userId) {
+      return res.status(403).json({ error: "Not allowed to modify this profile" });
+    }
+
+    const updated = await prisma.professional.update({
+      where: { id: profId },
+      data: { published: false },
+    });
+    res.json({ success: true, professional: updated });
+  } catch (error) {
+    console.error("Unpublish professional error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/businesses/:id/publish", (req, res) => {
+  res.status(403).json({
+    error:
+      "Business listings cannot be published via subscription. Visibility is managed through admin approval only.",
+  });
+});
+
+app.post("/api/products/:id/publish", (req, res) => {
+  res.status(403).json({
+    error:
+      "Product listings cannot be published via subscription. Visibility is managed through admin approval only.",
+  });
 });
 
 app.get("/api/professionals/:id", async (req, res) => {
@@ -3507,41 +3914,6 @@ app.get("/api/users/:userId/businesses", async (req, res) => {
   } catch (error) {
     console.error("Error fetching user businesses:", error);
     res.status(500).json({ error: "Failed to fetch user businesses." });
-  }
-});
-
-app.get("/api/professionals/approved", async (req, res) => {
-  try {
-    const approvedProfessionals = await prisma.professional.findMany({
-      // Assuming 'submittedDate' is a field on the Professional model
-      orderBy: { submittedDate: "desc" },
-    });
-
-    const formattedProfessionals = approvedProfessionals.map(
-      (professional) => ({
-        id: professional.id,
-        userId: professional.userId,
-        // Accessing the name/email from the included 'user' object
-        userName: professional.user.name,
-        userEmail: professional.user.email,
-        profession: professional.profession,
-        specialty: professional.specialty,
-        experience: professional.experience,
-        location: professional.location,
-        phone: professional.phone,
-        email: professional.email,
-        image: professional.image,
-        status: professional.status,
-        submittedDate: professional.submittedDate,
-        createdAt: professional.createdAt,
-        updatedAt: professional.updatedAt,
-      }),
-    );
-
-    res.status(200).json(formattedProfessionals);
-  } catch (error) {
-    console.error("❌ Error fetching approved professionals:", error);
-    res.status(500).json({ error: "Failed to fetch approved professionals" });
   }
 });
 

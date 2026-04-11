@@ -40,6 +40,8 @@ model Plans {
   priceYearly       Decimal  @default(0)
   allowedBusinesses Int      @default(1)
   allowedProducts   Int      @default(1)
+  /// When true, subscribers may publish their professional profile to public listings. Business and product listings never use this flag.
+  allowProfessionalPublish Boolean @default(true)
   users             User[] // Inverse relation
   userId            Int? // Remove this if not needed
   profile_status    String   @default("Not Approved")
@@ -138,6 +140,8 @@ model Professional {
   description   String? @db.Text // Long text; default String maps to VARCHAR(191) on MySQL and truncates long bios
   image         String?
   status        Status   @default(PENDING)
+  /// Public directory visibility (requires approved status + plan.allowProfessionalPublish). Not used for business/product.
+  published     Boolean  @default(true)
   submittedDate DateTime @default(now())
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -195,4 +199,30 @@ model Transaction {
   plan Plans @relation(fields: [planId], references: [id], onDelete: Cascade)
 
   @@map("transactions")
+}
+
+/// Managed list of cities (Somalia / Horn region + Other) for listings and forms
+model LookupCity {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("lookup_cities")
+}
+
+/// Categories by domain: business, product, or profession
+model LookupCategory {
+  id        Int      @id @default(autoincrement())
+  name      String
+  type      String // business | product | profession
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([name, type])
+  @@map("lookup_categories")
 }
