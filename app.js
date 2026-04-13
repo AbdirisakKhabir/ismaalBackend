@@ -956,6 +956,21 @@ const isAdmin = async (userId) => {
   return user?.role === "ADMIN";
 };
 
+/** True if x-user-id refers to an ADMIN user (for dashboard / PATCH overrides). */
+const requestUserIsAdmin = async (req) => {
+  const id = parseInt(String(req.headers["x-user-id"] || ""), 10);
+  if (Number.isNaN(id) || id <= 0) return false;
+  return isAdmin(id);
+};
+
+const LISTING_STATUS = new Set([
+  "PENDING",
+  "APPROVED",
+  "REJECTED",
+  "ACTIVE",
+  "INACTIVE",
+]);
+
 app.post("/api/upload", upload.array("images"), async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
@@ -2003,79 +2018,61 @@ app.get("/api/products", async (req, res) => {
 
 app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
   try {
-    const currentUserId = req.userId; // This comes as string "6" from header
-    const businessId = req.params.id; // This comes as string "8" from URL
-
-    console.log("=== UPDATE ATTEMPT ===");
-    console.log(
-      "User ID from header:",
-      currentUserId,
-      "Type:",
-      typeof currentUserId,
-    );
-    console.log(
-      "Business ID from URL:",
-      businessId,
-      "Type:",
-      typeof businessId,
-    );
-    console.log("Update data:", req.body);
-
-    const { name, description, category, phone, email, location, image } =
-      req.body;
-    const normalizedImage = normalizeImageField(image);
-
-    // Convert IDs to numbers to match Prisma schema
-    const currentUserIdNum = parseInt(currentUserId);
-    const businessIdNum = parseInt(businessId);
-
-    console.log(
-      "Converted User ID:",
-      currentUserIdNum,
-      "Type:",
-      typeof currentUserIdNum,
-    );
-    console.log(
-      "Converted Business ID:",
-      businessIdNum,
-      "Type:",
-      typeof businessIdNum,
-    );
+    const currentUserIdNum = parseInt(String(req.userId), 10);
+    const businessIdNum = parseInt(String(req.params.id), 10);
 
     if (isNaN(currentUserIdNum) || isNaN(businessIdNum)) {
       return res.status(400).json({ error: "Invalid ID format" });
     }
 
-    // 1. Find the business first
     const business = await prisma.business.findUnique({
       where: { id: businessIdNum },
     });
 
     if (!business) {
-      console.log("❌ Business not found with ID:", businessIdNum);
       return res.status(404).json({ error: "Business not found" });
     }
 
-    console.log("Found business:", {
-      id: business.id,
-      ownerId: business.ownerId,
-      name: business.name,
-    });
-
-    // 2. Check ownership (compare numbers)
-    if (business.ownerId !== currentUserIdNum) {
-      console.log("❌ Ownership mismatch:", {
-        businessOwner: business.ownerId,
-        currentUser: currentUserIdNum,
-      });
+    const admin = await requestUserIsAdmin(req);
+    if (!admin && business.ownerId !== currentUserIdNum) {
       return res
         .status(403)
         .json({ error: "Not authorized to update this business" });
     }
 
-    console.log("✅ Ownership verified - user owns this business");
+    const normalizedImage = normalizeImageField(req.body.image);
+    const { name, description, category, phone, email, location, businessType, status } =
+      req.body;
 
-    // 3. Prepare update data
+    if (admin) {
+      const data = {};
+      if (name !== undefined) data.name = String(name).trim();
+      if (description !== undefined) data.description = String(description);
+      if (category !== undefined) data.category = String(category).trim();
+      if (phone !== undefined) data.phone = String(phone).trim();
+      if (email !== undefined) data.email = String(email).trim();
+      if (location !== undefined) data.location = String(location).trim();
+      if (businessType !== undefined) {
+        data.businessType =
+          businessType === null || businessType === ""
+            ? null
+            : String(businessType).trim();
+      }
+      if (status !== undefined && LISTING_STATUS.has(String(status))) {
+        data.status = String(status);
+      }
+      if (normalizedImage !== undefined) data.image = normalizedImage;
+
+      const result = await prisma.business.update({
+        where: { id: businessIdNum },
+        data,
+      });
+      return res.json({
+        message: "Business updated",
+        business: result,
+      });
+    }
+
     const updateData = {
       name: name || business.name,
       description: description || business.description,
@@ -2083,25 +2080,22 @@ app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
       phone: phone || business.phone,
       email: email || business.email,
       location: location || business.location,
-      status: "PENDING", // Reset to pending for admin review
+      status: "PENDING",
       updatedAt: new Date(),
     };
+    if (businessType !== undefined) {
+      updateData.businessType =
+        businessType === null || businessType === ""
+          ? null
+          : String(businessType).trim();
+    }
     if (normalizedImage !== undefined) {
       updateData.image = normalizedImage;
     }
 
-    console.log("📝 Final update data:", updateData);
-
-    // 4. Perform update
     const result = await prisma.business.update({
       where: { id: businessIdNum },
       data: updateData,
-    });
-
-    console.log("✅ Update successful:", {
-      id: result.id,
-      name: result.name,
-      status: result.status,
     });
 
     res.json({
@@ -2109,146 +2103,132 @@ app.patch("/api/businesses/:id", isAuthenticated, async (req, res) => {
       business: result,
     });
   } catch (error) {
-    console.error("❌ UPDATE ERROR DETAILS:");
-    console.error("Error name:", error.name);
-    console.error("Error code:", error.code);
-    console.error("Error message:", error.message);
-
+    console.error("PATCH /api/businesses/:id", error);
     if (error.code === "P2025") {
       return res.status(404).json({ error: "Business not found" });
     }
-
     if (error.code === "P2002") {
       return res
         .status(409)
         .json({ error: "A business with this name or email already exists" });
     }
-
-    // Return the actual error message for debugging
     res.status(500).json({
       error: `Update failed: ${error.message}`,
     });
   }
 });
 
-// Backend endpoint for PATCH /api/products/:id
+// PATCH /api/products/:id — owner or ADMIN (dashboard)
 app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
   try {
-    const currentUserId = req.userId;
-    const productId = req.params.id;
-
-    console.log("=== PRODUCT UPDATE ATTEMPT ===");
-    console.log(
-      "User ID from header:",
-      currentUserId,
-      "Type:",
-      typeof currentUserId,
-    );
-    console.log("Product ID from URL:", productId, "Type:", typeof productId);
-    console.log("Update data:", req.body);
-
-    const { name, description, price, category, location, image } = req.body;
-    const normalizedImage = normalizeImageField(image);
-
-    // Convert IDs to numbers to match Prisma schema
-    const currentUserIdNum = parseInt(currentUserId);
-    const productIdNum = parseInt(productId);
-
-    console.log(
-      "Converted User ID:",
-      currentUserIdNum,
-      "Type:",
-      typeof currentUserIdNum,
-    );
-    console.log(
-      "Converted Product ID:",
-      productIdNum,
-      "Type:",
-      typeof productIdNum,
-    );
+    const currentUserIdNum = parseInt(String(req.userId), 10);
+    const productIdNum = parseInt(String(req.params.id), 10);
 
     if (isNaN(currentUserIdNum) || isNaN(productIdNum)) {
       return res.status(400).json({ error: "Invalid ID format" });
     }
 
-    // 1. Find the product first
     const existingProduct = await prisma.product.findUnique({
       where: { id: productIdNum },
     });
 
     if (!existingProduct) {
-      console.log("❌ Product not found with ID:", productIdNum);
       return res.status(404).json({ error: "Product not found" });
     }
 
-    console.log("Found product:", {
-      id: existingProduct.id,
-      userId: existingProduct.userId,
-      name: existingProduct.name,
-    });
-
-    // 2. Check ownership (compare numbers)
-    if (existingProduct.userId !== currentUserIdNum) {
-      console.log("❌ Ownership mismatch:", {
-        productOwner: existingProduct.userId,
-        currentUser: currentUserIdNum,
-      });
+    const admin = await requestUserIsAdmin(req);
+    if (!admin && existingProduct.userId !== currentUserIdNum) {
       return res
         .status(403)
         .json({ error: "Not authorized to update this product" });
     }
 
-    console.log("✅ Ownership verified - user owns this product");
+    const normalizedImage = normalizeImageField(req.body.image);
+    const {
+      name,
+      description,
+      price,
+      price_to,
+      price_option,
+      crossed_price,
+      category,
+      type,
+      posted_from,
+      location,
+      status,
+    } = req.body;
 
-    // 3. Prepare update data
+    const numOr = (v, fallback) => {
+      if (v === undefined) return fallback;
+      if (v === null || v === "") return null;
+      const n = typeof v === "number" ? v : parseFloat(v);
+      return Number.isFinite(n) ? n : fallback;
+    };
+
+    if (admin) {
+      const data = {};
+      if (name !== undefined) data.name = String(name).trim();
+      if (description !== undefined) data.description = String(description);
+      if (category !== undefined) data.category = String(category).trim();
+      if (location !== undefined) data.location = String(location).trim();
+      if (type !== undefined) data.type = String(type).trim();
+      if (posted_from !== undefined) data.posted_from = String(posted_from).trim();
+      if (price_option !== undefined) data.price_option = String(price_option).trim();
+      if (price !== undefined) data.price = numOr(price, existingProduct.price);
+      if (price_to !== undefined) data.price_to = numOr(price_to, existingProduct.price_to);
+      if (crossed_price !== undefined)
+        data.crossed_price = numOr(crossed_price, existingProduct.crossed_price);
+      if (status !== undefined && LISTING_STATUS.has(String(status))) {
+        data.status = String(status);
+      }
+      if (normalizedImage !== undefined) data.image = normalizedImage;
+
+      const result = await prisma.product.update({
+        where: { id: productIdNum },
+        data,
+      });
+      return res.json({
+        message: "Product updated",
+        product: processProductData(result),
+      });
+    }
+
     const updateData = {
       name: name || existingProduct.name,
       description: description || existingProduct.description,
-      price: price || existingProduct.price,
+      price: price !== undefined ? numOr(price, existingProduct.price) : existingProduct.price,
       category: category || existingProduct.category,
       location: location || existingProduct.location,
-      status: "PENDING", // Reset to pending for admin review
+      status: "PENDING",
       updatedAt: new Date(),
     };
-    if (normalizedImage !== undefined) {
-      updateData.image = normalizedImage;
-    }
+    if (price_to !== undefined) updateData.price_to = numOr(price_to, existingProduct.price_to);
+    if (price_option !== undefined) updateData.price_option = String(price_option).trim();
+    if (crossed_price !== undefined)
+      updateData.crossed_price = numOr(crossed_price, existingProduct.crossed_price);
+    if (type !== undefined) updateData.type = String(type).trim();
+    if (posted_from !== undefined) updateData.posted_from = String(posted_from).trim();
+    if (normalizedImage !== undefined) updateData.image = normalizedImage;
 
-    console.log("📝 Final update data:", updateData);
-
-    // 4. Perform update
     const result = await prisma.product.update({
       where: { id: productIdNum },
       data: updateData,
     });
 
-    console.log("✅ Product update successful:", {
-      id: result.id,
-      name: result.name,
-      status: result.status,
-    });
-
     res.json({
       message: "Product updated successfully and set to PENDING for review",
-      product: result,
+      product: processProductData(result),
     });
   } catch (error) {
-    console.error("❌ PRODUCT UPDATE ERROR DETAILS:");
-    console.error("Error name:", error.name);
-    console.error("Error code:", error.code);
-    console.error("Error message:", error.message);
-
+    console.error("PATCH /api/products/:id", error);
     if (error.code === "P2025") {
       return res.status(404).json({ error: "Product not found" });
     }
-
     if (error.code === "P2002") {
       return res
         .status(409)
         .json({ error: "A product with this name already exists" });
     }
-
-    // Return the actual error message for debugging
     res.status(500).json({
       error: `Product update failed: ${error.message}`,
     });
@@ -2258,6 +2238,10 @@ app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
 // Get all businesses (for admin)
 app.get("/api/admin/businesses", async (req, res) => {
   try {
+    const auth = await getAdminUserOrError(req);
+    if (auth.error) {
+      return res.status(auth.status).json({ error: auth.error });
+    }
     const businesses = await prisma.business.findMany({
       include: { owner: { select: { name: true, email: true } } },
     });
@@ -2323,6 +2307,10 @@ const processProductData = (product) => {
 // Get all products (for admin)
 app.get("/api/admin/products", async (req, res) => {
   try {
+    const auth = await getAdminUserOrError(req);
+    if (auth.error) {
+      return res.status(auth.status).json({ error: auth.error });
+    }
     const products = await prisma.product.findMany({
       include: { user: { select: { name: true, email: true } } },
     });
@@ -2460,7 +2448,7 @@ app.post("/api/professionals", async (req, res) => {
   }
 });
 
-// Update professional profile
+// Update professional profile — owner or ADMIN
 app.patch("/api/professionals/:id", isAuthenticated, async (req, res) => {
   try {
     const currentUserId = parseInt(req.userId);
@@ -2478,14 +2466,67 @@ app.patch("/api/professionals/:id", isAuthenticated, async (req, res) => {
       return res.status(404).json({ error: "Professional not found" });
     }
 
-    if (professional.userId !== currentUserId) {
+    const admin = await requestUserIsAdmin(req);
+    if (!admin && professional.userId !== currentUserId) {
       return res
         .status(403)
         .json({ error: "Not authorized to update this profile" });
     }
 
-    const professions = normalizeProfessionList(req.body.profession);
     const normalizedImage = normalizeImageField(req.body.image);
+
+    if (admin) {
+      const data = {};
+      if (req.body.profession !== undefined) {
+        data.profession = normalizeProfessionList(req.body.profession).join(", ");
+      }
+      if (req.body.specialty !== undefined)
+        data.specialty = String(req.body.specialty).trim();
+      if (req.body.experience !== undefined)
+        data.experience = String(req.body.experience).trim();
+      if (req.body.location !== undefined)
+        data.location = String(req.body.location).trim();
+      if (req.body.phone !== undefined)
+        data.phone = String(req.body.phone).trim().replace(/\s+/g, "");
+      if (req.body.email !== undefined) data.email = String(req.body.email).trim();
+      if (req.body.description !== undefined) {
+        const raw = req.body.description;
+        data.description =
+          raw == null || String(raw).trim() === ""
+            ? null
+            : String(raw).slice(0, 1000);
+      }
+      if (req.body.status !== undefined && LISTING_STATUS.has(String(req.body.status))) {
+        data.status = String(req.body.status);
+      }
+      if (req.body.published !== undefined) data.published = Boolean(req.body.published);
+      if (normalizedImage !== undefined) data.image = normalizedImage;
+
+      const snapshot = { ...professional, ...data };
+      const validationError = validateProfessionalData({
+        profession: snapshot.profession,
+        specialty: snapshot.specialty,
+        experience: snapshot.experience,
+        location: snapshot.location,
+        phone: snapshot.phone,
+        email: snapshot.email,
+        description: snapshot.description,
+      });
+      if (validationError) {
+        return res.status(400).json({ error: validationError });
+      }
+
+      const updatedProfile = await prisma.professional.update({
+        where: { id: professionalId },
+        data,
+      });
+      return res.json({
+        message: "Professional updated",
+        professional: updatedProfile,
+      });
+    }
+
+    const professions = normalizeProfessionList(req.body.profession);
     const rawDesc = req.body.description;
     const descriptionNormalized =
       rawDesc == null || String(rawDesc).trim() === ""
@@ -3208,6 +3249,10 @@ app.delete("/api/professionals/:id", async (req, res) => {
 // Get all professionals (for admin)
 app.get("/api/admin/professionals", async (req, res) => {
   try {
+    const auth = await getAdminUserOrError(req);
+    if (auth.error) {
+      return res.status(auth.status).json({ error: auth.error });
+    }
     const professionals = await prisma.professional.findMany({
       include: { user: { select: { name: true, email: true } } },
     });
