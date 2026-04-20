@@ -934,6 +934,16 @@ const validatedPlanData = (data) => {
         return `${field} is required`;
       }
     }
+    // allowedBusinesses / allowedProducts: 0 is valid (same falsy issue as prices)
+    else if (field === "allowedBusinesses" || field === "allowedProducts") {
+      if (data[field] === undefined || data[field] === null || data[field] === "") {
+        return `${field} is required`;
+      }
+      const n = Number(data[field]);
+      if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
+        return `${field} must be a non-negative integer`;
+      }
+    }
     // For other fields, check if they exist and have truthy values
     else if (!data[field]) {
       return `${field} is required`;
@@ -1097,6 +1107,8 @@ app.get("/api/users/:id", async (req, res) => {
         email: true,
         phone: true,
         location: true,
+        image: true,
+        description: true,
         role: true,
         plan_id: true,
         createdAt: true,
@@ -1330,6 +1342,24 @@ const validateUpdateUserData = (data) => {
     return "Location must be a string.";
   }
 
+  if (data.image !== undefined && typeof data.image !== "string") {
+    return "Image must be a string (URL).";
+  }
+  if (
+    data.description !== undefined &&
+    data.description !== null &&
+    typeof data.description !== "string"
+  ) {
+    return "Description must be a string.";
+  }
+  if (
+    data.description &&
+    typeof data.description === "string" &&
+    data.description.length > 2000
+  ) {
+    return "Description must be 2000 characters or less.";
+  }
+
   return null; // Validation passed
 };
 
@@ -1390,7 +1420,8 @@ app.patch("/api/users/:id", isAuthenticated, async (req, res) => {
     );
     console.log("Update data:", req.body);
 
-    const { name, email, phone, location, password } = req.body;
+    const { name, email, phone, location, password, image, description } =
+      req.body;
 
     // Convert IDs to numbers to match Prisma schema
     const currentUserIdNum = parseInt(currentUserId);
@@ -1411,6 +1442,25 @@ app.patch("/api/users/:id", isAuthenticated, async (req, res) => {
 
     if (isNaN(currentUserIdNum) || isNaN(userIdToUpdateNum)) {
       return res.status(400).json({ error: "Invalid ID format" });
+    }
+
+    const payloadForValidation = {
+      ...(name !== undefined && { name }),
+      ...(email !== undefined && { email }),
+      ...(phone !== undefined && { phone }),
+      ...(location !== undefined && { location }),
+      ...(password !== undefined && { password }),
+      ...(image !== undefined && { image }),
+      ...(description !== undefined && {
+        description:
+          description === null || description === ""
+            ? ""
+            : String(description),
+      }),
+    };
+    const validationErr = validateUpdateUserData(payloadForValidation);
+    if (validationErr) {
+      return res.status(400).json({ error: validationErr });
     }
 
     // Security check: users can only update their own profile
@@ -1450,6 +1500,15 @@ app.patch("/api/users/:id", isAuthenticated, async (req, res) => {
       ...(email !== undefined && { email }),
       ...(phone !== undefined && { phone }),
       ...(location !== undefined && { location }),
+      ...(image !== undefined && {
+        image: image === null || image === "" ? null : String(image).trim(),
+      }),
+      ...(description !== undefined && {
+        description:
+          description === null || description === ""
+            ? null
+            : String(description).trim().slice(0, 2000),
+      }),
     };
 
     // Handle password hashing if provided
@@ -1471,6 +1530,8 @@ app.patch("/api/users/:id", isAuthenticated, async (req, res) => {
         name: true,
         phone: true,
         location: true,
+        image: true,
+        description: true,
         role: true,
         plan_id: true,
         createdAt: true,

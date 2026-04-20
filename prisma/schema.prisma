@@ -10,16 +10,20 @@ datasource db {
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  password  String
-  name      String
-  phone     String?
-  location  String?
-  plan_id   Int      @default(1)
-  role      Role     @default(USER)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          Int      @id @default(autoincrement())
+  email       String   @unique
+  password    String
+  name        String
+  phone       String?
+  location    String?
+  /// Profile photo URL (e.g. Cloudinary)
+  image       String?  @db.Text
+  /// Short bio / about text for the account profile
+  description String?  @db.Text
+  plan_id     Int      @default(1)
+  role        Role     @default(USER)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   // Relations
   businesses            Business[]
