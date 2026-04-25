@@ -1881,6 +1881,11 @@ app.get("/api/businesses", async (req, res) => {
   }
 });
 
+const normalizeListingDisplay = (v) => {
+  const s = v == null ? "" : String(v).trim().toLowerCase();
+  return s === "category" ? "category" : "location";
+};
+
 const validateProductData = (data) => {
   const errors = {};
 
@@ -1939,6 +1944,13 @@ const validateProductData = (data) => {
   if (!data.posted_from?.trim())
     errors.posted_from = "Posting source is required.";
 
+  if (data.listingDisplay != null && String(data.listingDisplay).trim() !== "") {
+    const ld = String(data.listingDisplay).trim().toLowerCase();
+    if (ld !== "location" && ld !== "category") {
+      errors.listingDisplay = "listingDisplay must be 'location' or 'category'.";
+    }
+  }
+
   return Object.keys(errors).length > 0 ? errors : null;
 };
 
@@ -1955,6 +1967,7 @@ app.post("/api/products", async (req, res) => {
       category,
       type,
       location,
+      listingDisplay,
       posted_from, // This should be a string like "Personal Account" or "Business: Business Name"
       posted_from_id, // This is the numeric ID
       image,
@@ -2026,6 +2039,7 @@ app.post("/api/products", async (req, res) => {
       category,
       type,
       location,
+      listingDisplay: normalizeListingDisplay(listingDisplay),
       posted_from: postedFromString, // Must be a string
       image,
       userId: parseInt(userId),
@@ -2216,6 +2230,7 @@ app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
       type,
       posted_from,
       location,
+      listingDisplay,
       status,
     } = req.body;
 
@@ -2232,6 +2247,8 @@ app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
       if (description !== undefined) data.description = String(description);
       if (category !== undefined) data.category = String(category).trim();
       if (location !== undefined) data.location = String(location).trim();
+      if (listingDisplay !== undefined)
+        data.listingDisplay = normalizeListingDisplay(listingDisplay);
       if (type !== undefined) data.type = String(type).trim();
       if (posted_from !== undefined) data.posted_from = String(posted_from).trim();
       if (price_option !== undefined) data.price_option = String(price_option).trim();
@@ -2260,6 +2277,10 @@ app.patch("/api/products/:id", isAuthenticated, async (req, res) => {
       price: price !== undefined ? numOr(price, existingProduct.price) : existingProduct.price,
       category: category || existingProduct.category,
       location: location || existingProduct.location,
+      listingDisplay:
+        listingDisplay !== undefined
+          ? normalizeListingDisplay(listingDisplay)
+          : normalizeListingDisplay(existingProduct.listingDisplay),
       status: "PENDING",
       updatedAt: new Date(),
     };
@@ -3002,10 +3023,9 @@ app.get("/api/products/:id", async (req, res) => {
         user: {
           select: {
             id: true,
-            name: true, // Fetch the user's name
-            email: true, // Fetch the user's email
-            // Note: If 'phone' is on the User model, include it here.
-            // Since it's not in the provided User model, we'll assume it's fetched from the User model if available.
+            name: true,
+            email: true,
+            phone: true,
           },
         },
       },
@@ -3015,12 +3035,11 @@ app.get("/api/products/:id", async (req, res) => {
       return res.status(404).json({ error: "Product not found" });
     }
 
-    // 💡 OPTIONAL: Flatten the data for easier use on the frontend
     const formattedProduct = {
       ...product,
       userName: product.user.name,
       userEmail: product.user.email,
-      // userPhone: product.user.phone, // Include if phone is on the User model
+      userPhone: product.user.phone ?? null,
     };
 
     // Remove the nested user object if you flattened it
