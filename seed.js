@@ -16,6 +16,7 @@ async function main() {
       email: "admin@ismaal.com",
       password: hashedPassword,
       name: "Admin User",
+      phone: "252700000001",
       role: "ADMIN",
     },
   });
@@ -32,6 +33,7 @@ async function main() {
       email: "user@example.com",
       password: userPassword,
       name: "Test User",
+      phone: "252700000002",
       role: "USER",
     },
   });

@@ -2,7 +2,6 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
-const crypto = require("crypto");
 const nodemailer = require("nodemailer");
 const { PrismaClient } = require("@prisma/client");
 // In your backend - api/upload.js
@@ -18,6 +17,33 @@ cloudinary.config({
 
 const app = express();
 const prisma = new PrismaClient();
+
+const DEFAULT_PHONE_CC = process.env.PHONE_DEFAULT_COUNTRY || "252";
+
+function formatPhoneForWhatsApp(input) {
+  const formattedPhone = String(input || "").replace(/\D/g, "");
+  let cleanPhone = formattedPhone;
+  if (!cleanPhone) return "";
+  if (cleanPhone.startsWith("0")) {
+    cleanPhone = DEFAULT_PHONE_CC + cleanPhone.substring(1);
+  } else if (!cleanPhone.startsWith(DEFAULT_PHONE_CC)) {
+    cleanPhone = DEFAULT_PHONE_CC + cleanPhone;
+  }
+  return cleanPhone;
+}
+
+async function findUserByRegisteredPhone(phoneInput) {
+  const target = formatPhoneForWhatsApp(phoneInput);
+  if (!target || target.length < 10) return null;
+  const users = await prisma.user.findMany({
+    where: {
+      AND: [{ phone: { not: null } }, { NOT: { phone: "" } }],
+    },
+    select: { id: true, phone: true, name: true, email: true },
+  });
+  return users.find((u) => formatPhoneForWhatsApp(u.phone || "") === target) || null;
+}
+
 // Configure multer for file upload
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -38,13 +64,26 @@ let appVersionConfig = {
 app.post("/api/auth/register", async (req, res) => {
   try {
     const { email, password, name, phone } = req.body;
-    if (!email || !password || !name) {
-      return res.status(400).json({ error: "All fields are required" });
+    if (
+      !email ||
+      !password ||
+      !name ||
+      phone == null ||
+      !String(phone).trim()
+    ) {
+      return res.status(400).json({
+        error: "All fields are required, including phone number",
+      });
     }
 
     const normalizedEmail = String(email).trim().toLowerCase();
     if (!normalizedEmail.includes("@")) {
       return res.status(400).json({ error: "Invalid email format" });
+    }
+
+    const normalizedPhone = formatPhoneForWhatsApp(String(phone).trim());
+    if (!normalizedPhone || normalizedPhone.length < 10) {
+      return res.status(400).json({ error: "A valid phone number is required" });
     }
 
     // 1. Check for existing user (email stored lowercase — matches login)
@@ -64,7 +103,7 @@ app.post("/api/auth/register", async (req, res) => {
         email: normalizedEmail,
         password: hashedPassword,
         name: String(name).trim(),
-        phone: phone != null && String(phone).trim() ? String(phone).trim() : null,
+        phone: normalizedPhone,
       },
     });
 
@@ -151,89 +190,198 @@ function createEmailTransporter(config) {
   });
 }
 
-// POST /api/auth/forgot-password
-app.post("/api/auth/forgot-password", async (req, res) => {
-  try {
-    const { email } = req.body;
-    if (!email || !String(email).trim()) {
-      return res.status(400).json({ error: "Email is required" });
-    }
-    const normalizedEmail = String(email).trim().toLowerCase();
-    if (!normalizedEmail.includes("@")) {
-      return res.status(400).json({ error: "Invalid email format" });
-    }
+// --- Forgot password via WhatsApp (Bawa) — same pattern as libaax-fitness /api/whatsapp/send ---
+// Prefer BAWA_TOKEN / BAWA_INSTANCE_ID in .env; fallbacks are the Ismaal Bawa client (rotate via env).
+const BAWA_FALLBACK_TOKEN =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOiJIaU9YbnJuRmxRTkI2a2Y4UjNHOWlJSDI0WU1xRGhDMiIsInJvbGUiOiJ1c2VyIiwiaWF0IjoxNzYxNTc0MjMwfQ.-l0jsppJn0tST-Yeq0lJz_NGKTL34or9oUUqohnUqnw";
+const BAWA_FALLBACK_INSTANCE_ID =
+  "eyJ1aWQiOiJIaU9YbnJuRmxRTkI2a2Y4UjNHOWlJSDI0WU1xRGhDMiIsImNsaWVudF9pZCI6IklzbWFhbCJ9";
 
-    const user = await prisma.user.findUnique({
-      where: { email: normalizedEmail },
+function generateNumericCode(length = 6) {
+  const min = 10 ** (length - 1);
+  const max = 10 ** length - 1;
+  return String(Math.floor(min + Math.random() * (max - min + 1)));
+}
+
+async function sendBawaPasswordResetCode(whatsappDigits, plainCode) {
+  const token = (process.env.BAWA_TOKEN || "").trim() || BAWA_FALLBACK_TOKEN;
+  const instanceId =
+    (process.env.BAWA_INSTANCE_ID || "").trim() || BAWA_FALLBACK_INSTANCE_ID;
+  if (!token || !instanceId) {
+    throw new Error("Bawa is not configured (BAWA_TOKEN / BAWA_INSTANCE_ID)");
+  }
+  const jid = `${whatsappDigits}@s.whatsapp.net`;
+  const message = `Your Ismaal password reset code is: ${plainCode}. It expires in 15 minutes. If you did not request this, ignore this message.`;
+  const apiUrl = `https://bawa.app/api/v1/send-text?token=${token}&instance_id=${instanceId}&jid=${jid}&msg=${encodeURIComponent(
+    message,
+  )}`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(apiUrl, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "IsmaalBackend/1.0",
+      },
+      signal: controller.signal,
     });
 
-    // Always return success to avoid revealing if email exists (security)
-    const successMessage =
-      "If an account exists with this email, you will receive a password reset link shortly. Please check your inbox and spam folder.";
+    const contentType = response.headers.get("content-type") || "";
+    let responseData;
+    if (contentType.includes("application/json")) {
+      responseData = await response.json();
+    } else {
+      const textResponse = await response.text();
+      try {
+        responseData = JSON.parse(textResponse);
+      } catch {
+        responseData = {
+          status: response.ok ? "success" : "error",
+          rawResponse: textResponse,
+          statusCode: response.status,
+        };
+      }
+    }
 
+    const bawaOk =
+      response.ok &&
+      (responseData?.status === "success" || responseData?.success === true);
+    if (!bawaOk) {
+      const detail =
+        responseData?.message ||
+        responseData?.error ||
+        `HTTP ${response.status}: ${response.statusText || ""}`;
+      throw new Error(detail);
+    }
+    return true;
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error("Request timeout - Bawa API took too long to respond");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// POST /api/auth/forgot-password — sends a 6-digit code via Bawa WhatsApp
+app.post("/api/auth/forgot-password", async (req, res) => {
+  const successMessage =
+    "If an account exists with this phone number, you will receive a verification code on WhatsApp shortly.";
+  try {
+    const rawPhone =
+      req.body.phone ??
+      req.body.phoneNumber ??
+      req.body.mobile ??
+      req.body.msisdn;
+    if (!rawPhone || !String(rawPhone).trim()) {
+      return res.status(400).json({ error: "Phone number is required" });
+    }
+
+    const user = await findUserByRegisteredPhone(rawPhone);
     if (!user) {
       return res.json({ success: true, message: successMessage });
     }
 
-    const emailConfig = await getEmailConfig();
-    if (!emailConfig.smtpPass) {
-      console.error("SMTP_PASS or email config not set. Cannot send reset email.");
-      return res.json({ success: true, message: successMessage });
-    }
+    await prisma.passwordResetToken.updateMany({
+      where: { userId: user.id, used: false },
+      data: { used: true },
+    });
 
-    const token = crypto.randomBytes(32).toString("hex");
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    const plainCode = generateNumericCode(6);
+    const tokenHash = await bcrypt.hash(plainCode, 10);
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
-    await prisma.passwordResetToken.create({
+    const resetRow = await prisma.passwordResetToken.create({
       data: {
         userId: user.id,
-        token,
+        token: tokenHash,
         expiresAt,
       },
     });
 
-    const resetLink = `${emailConfig.resetBaseUrl}/reset-password?token=${token}`;
-
-    const transporter = createEmailTransporter(emailConfig);
-    await transporter.sendMail({
-      from: `"Ismaal" <${emailConfig.fromEmail}>`,
-      to: user.email,
-      subject: "Reset Your Password - Ismaal",
-      html: `
-        <p>Hello ${user.name || "User"},</p>
-        <p>You requested a password reset for your Ismaal account.</p>
-        <p>Click the link below to reset your password (valid for 1 hour):</p>
-        <p><a href="${resetLink}">${resetLink}</a></p>
-        <p>If you did not request this, please ignore this email.</p>
-        <p>— Ismaal Team</p>
-      `,
-      text: `Reset your password: ${resetLink}`,
-    });
+    const waPhone = formatPhoneForWhatsApp(rawPhone);
+    try {
+      await sendBawaPasswordResetCode(waPhone, plainCode);
+    } catch (bawaErr) {
+      console.error("Bawa send error:", bawaErr);
+      await prisma.passwordResetToken.delete({ where: { id: resetRow.id } }).catch(() => {});
+      return res.status(502).json({
+        error:
+          "Could not send verification code. Please try again later or contact support.",
+      });
+    }
 
     return res.json({ success: true, message: successMessage });
   } catch (error) {
     console.error("Forgot password error:", error);
-    return res.json({
-      success: true,
-      message:
-        "If an account exists with this email, you will receive a password reset link shortly.",
-    });
+    return res.status(500).json({ error: "Something went wrong. Please try again." });
   }
 });
 
-// POST /api/auth/reset-password
+// POST /api/auth/reset-password — WhatsApp code + new password, or legacy email token
 app.post("/api/auth/reset-password", async (req, res) => {
   try {
-    const { token, newPassword } = req.body;
-    if (!token || !newPassword) {
-      return res.status(400).json({ error: "Token and new password are required" });
-    }
-    if (String(newPassword).length < 8) {
+    const { token, phone, code, newPassword } = req.body;
+    if (!newPassword || String(newPassword).length < 8) {
       return res.status(400).json({ error: "Password must be at least 8 characters" });
     }
 
+    const phoneTrim = phone != null ? String(phone).trim() : "";
+    const codeTrim = code != null ? String(code).trim() : "";
+
+    if (phoneTrim && codeTrim) {
+      const user = await findUserByRegisteredPhone(phoneTrim);
+      if (!user) {
+        return res.status(400).json({ error: "Invalid or expired verification code" });
+      }
+
+      const resetRow = await prisma.passwordResetToken.findFirst({
+        where: {
+          userId: user.id,
+          used: false,
+          expiresAt: { gt: new Date() },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (!resetRow || !String(resetRow.token).startsWith("$2")) {
+        return res.status(400).json({ error: "Invalid or expired verification code" });
+      }
+
+      const match = await bcrypt.compare(codeTrim, resetRow.token);
+      if (!match) {
+        return res.status(400).json({ error: "Invalid or expired verification code" });
+      }
+
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      await prisma.$transaction([
+        prisma.user.update({
+          where: { id: user.id },
+          data: { password: hashedPassword },
+        }),
+        prisma.passwordResetToken.update({
+          where: { id: resetRow.id },
+          data: { used: true },
+        }),
+      ]);
+
+      return res.json({
+        success: true,
+        message: "Password has been reset successfully. You can now log in.",
+      });
+    }
+
+    if (!token || !String(token).trim()) {
+      return res.status(400).json({
+        error: "Provide phone and verification code with new password, or a reset token",
+      });
+    }
+
     const resetToken = await prisma.passwordResetToken.findUnique({
-      where: { token },
+      where: { token: String(token).trim() },
       include: { user: true },
     });
 
@@ -2496,12 +2644,30 @@ const validateProfessionalData = (data) => {
 
 app.post("/api/professionals", async (req, res) => {
   try {
-    const validationError = validateProfessionalData(req.body);
+    const body = { ...req.body };
+    const uid =
+      typeof body.userId === "string"
+        ? parseInt(body.userId, 10)
+        : body.userId;
+    if (
+      (!body.email || !String(body.email).trim()) &&
+      uid != null &&
+      !Number.isNaN(Number(uid))
+    ) {
+      const account = await prisma.user.findUnique({
+        where: { id: Number(uid) },
+        select: { email: true },
+      });
+      if (account?.email) {
+        body.email = account.email;
+      }
+    }
+
+    const validationError = validateProfessionalData(body);
     if (validationError) {
       return res.status(400).json({ error: validationError });
     }
-    const professions = normalizeProfessionList(req.body.profession);
-    const body = req.body;
+    const professions = normalizeProfessionList(body.profession);
     const descriptionNormalized =
       body.description == null || String(body.description).trim() === ""
         ? null
@@ -2614,13 +2780,30 @@ app.patch("/api/professionals/:id", isAuthenticated, async (req, res) => {
       rawDesc == null || String(rawDesc).trim() === ""
         ? null
         : String(rawDesc).slice(0, 1000);
+
+    let resolvedEmail =
+      req.body.email != null && String(req.body.email).trim()
+        ? String(req.body.email).trim()
+        : "";
+    if (!resolvedEmail) {
+      resolvedEmail =
+        (professional.email && String(professional.email).trim()) ||
+        (
+          await prisma.user.findUnique({
+            where: { id: professional.userId },
+            select: { email: true },
+          })
+        )?.email?.trim() ||
+        "";
+    }
+
     const updateData = {
       profession: professions.join(", "),
       specialty: req.body.specialty,
       experience: req.body.experience,
       location: req.body.location,
       phone: req.body.phone,
-      email: req.body.email,
+      email: resolvedEmail,
       description: descriptionNormalized,
       status: "PENDING",
       published: false,

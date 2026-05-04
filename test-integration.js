@@ -24,7 +24,8 @@ async function testSystemIntegration() {
       body: JSON.stringify({
         name: 'Test User',
         email: 'test@example.com',
-        password: 'test123'
+        password: 'test123',
+        phone: '+252700123456'
       })
     });
     
