@@ -32,16 +32,53 @@ function formatPhoneForWhatsApp(input) {
   return cleanPhone;
 }
 
+function getPhoneCandidates(input) {
+  const normalized = formatPhoneForWhatsApp(input);
+  const digits = String(input || "").replace(/\D/g, "");
+  const localFromNormalized =
+    normalized && normalized.startsWith(DEFAULT_PHONE_CC)
+      ? `0${normalized.slice(DEFAULT_PHONE_CC.length)}`
+      : "";
+  const localFromRaw = digits.startsWith("0") ? digits : "";
+  const plusNormalized = normalized ? `+${normalized}` : "";
+  return Array.from(
+    new Set(
+      [normalized, digits, plusNormalized, localFromNormalized, localFromRaw].filter(Boolean),
+    ),
+  );
+}
+
+function hasValidPhoneLength(input) {
+  const digits = String(input || "").replace(/\D/g, "");
+  return digits.length >= 8 && digits.length <= 15;
+}
+
 async function findUserByRegisteredPhone(phoneInput) {
   const target = formatPhoneForWhatsApp(phoneInput);
-  if (!target || target.length < 10) return null;
+  if (!target || target.length < 8) return null;
+
+  const candidates = getPhoneCandidates(phoneInput);
+  let user = await prisma.user.findFirst({
+    where: {
+      phone: { in: candidates },
+    },
+    select: { id: true, phone: true, name: true, email: true },
+  });
+  if (user) return user;
+
+  // Fallback for legacy rows with mixed formatting
   const users = await prisma.user.findMany({
     where: {
       AND: [{ phone: { not: null } }, { NOT: { phone: "" } }],
     },
     select: { id: true, phone: true, name: true, email: true },
   });
-  return users.find((u) => formatPhoneForWhatsApp(u.phone || "") === target) || null;
+  user =
+    users.find((u) => {
+      const p = formatPhoneForWhatsApp(u.phone || "");
+      return p === target;
+    }) || null;
+  return user;
 }
 
 // Configure multer for file upload
@@ -279,6 +316,11 @@ app.post("/api/auth/forgot-password", async (req, res) => {
     if (!rawPhone || !String(rawPhone).trim()) {
       return res.status(400).json({ error: "Phone number is required" });
     }
+    if (!hasValidPhoneLength(rawPhone)) {
+      return res
+        .status(400)
+        .json({ error: "Phone number must be between 8 and 15 digits" });
+    }
 
     const user = await findUserByRegisteredPhone(rawPhone);
     if (!user) {
@@ -302,15 +344,16 @@ app.post("/api/auth/forgot-password", async (req, res) => {
       },
     });
 
-    const waPhone = formatPhoneForWhatsApp(rawPhone);
+    // Prefer sending to the verified/registered phone from DB (more reliable than raw input).
+    const waPhone = formatPhoneForWhatsApp(user.phone || rawPhone);
     try {
       await sendBawaPasswordResetCode(waPhone, plainCode);
     } catch (bawaErr) {
       console.error("Bawa send error:", bawaErr);
       await prisma.passwordResetToken.delete({ where: { id: resetRow.id } }).catch(() => {});
       return res.status(502).json({
-        error:
-          "Could not send verification code. Please try again later or contact support.",
+        error: "Could not send verification code. Please try again later or contact support.",
+        details: String(bawaErr?.message || "Bawa send failed"),
       });
     }
 
@@ -331,6 +374,18 @@ app.post("/api/auth/reset-password", async (req, res) => {
 
     const phoneTrim = phone != null ? String(phone).trim() : "";
     const codeTrim = code != null ? String(code).trim() : "";
+
+    if (phoneTrim && !hasValidPhoneLength(phoneTrim)) {
+      return res
+        .status(400)
+        .json({ error: "Phone number must be between 8 and 15 digits" });
+    }
+    if (phoneTrim && !codeTrim) {
+      return res.status(400).json({ error: "Verification code is required" });
+    }
+    if (!phoneTrim && codeTrim) {
+      return res.status(400).json({ error: "Phone number is required" });
+    }
 
     if (phoneTrim && codeTrim) {
       const user = await findUserByRegisteredPhone(phoneTrim);
@@ -3358,6 +3413,7 @@ app.get("/api/professionals/approved", async (req, res) => {
         location: professional.location,
         phone: professional.phone,
         email: professional.email,
+        description: professional.description,
         image: professional.image,
         status: professional.status,
         published: professional.published,
