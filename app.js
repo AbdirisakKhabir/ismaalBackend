@@ -1238,6 +1238,7 @@ app.get("/api/users", async (req, res) => {
         id: true,
         name: true,
         email: true,
+        phone: true,
         role: true,
         plan_id: true,
         createdAt: true,
