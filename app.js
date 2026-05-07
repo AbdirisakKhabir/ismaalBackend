@@ -21,13 +21,25 @@ const prisma = new PrismaClient();
 const DEFAULT_PHONE_CC = process.env.PHONE_DEFAULT_COUNTRY || "252";
 
 function formatPhoneForWhatsApp(input) {
-  const formattedPhone = String(input || "").replace(/\D/g, "");
+  const raw = String(input || "").trim();
+  const formattedPhone = raw.replace(/\D/g, "");
   let cleanPhone = formattedPhone;
   if (!cleanPhone) return "";
+  // International formats should be preserved:
+  // +44..., +1..., 0044..., etc.
+  if (raw.startsWith("+")) {
+    return cleanPhone;
+  }
+  if (cleanPhone.startsWith("00")) {
+    return cleanPhone.slice(2);
+  }
+  // Local format (e.g. 061...) => default country code.
   if (cleanPhone.startsWith("0")) {
     cleanPhone = DEFAULT_PHONE_CC + cleanPhone.substring(1);
-  } else if (!cleanPhone.startsWith(DEFAULT_PHONE_CC)) {
-    cleanPhone = DEFAULT_PHONE_CC + cleanPhone;
+  } else {
+    // If number is short, treat as local and prepend default country code.
+    // If long enough, assume it's already international digits.
+    cleanPhone = cleanPhone.length <= 9 ? DEFAULT_PHONE_CC + cleanPhone : cleanPhone;
   }
   return cleanPhone;
 }
