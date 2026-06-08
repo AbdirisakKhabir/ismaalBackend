@@ -252,7 +252,14 @@ function generateNumericCode(length = 6) {
   return String(Math.floor(min + Math.random() * (max - min + 1)));
 }
 
-async function sendBawaPasswordResetCode(whatsappDigits, plainCode) {
+function maskPhoneNumber(phone) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (!digits) return "your phone";
+  if (digits.length <= 4) return `****${digits}`;
+  return `${"*".repeat(Math.min(digits.length - 4, 6))}${digits.slice(-4)}`;
+}
+
+async function sendBawaWhatsAppText(whatsappDigits, message) {
   const token = (process.env.BAWA_TOKEN || "").trim() || BAWA_FALLBACK_TOKEN;
   const instanceId =
     (process.env.BAWA_INSTANCE_ID || "").trim() || BAWA_FALLBACK_INSTANCE_ID;
@@ -260,7 +267,6 @@ async function sendBawaPasswordResetCode(whatsappDigits, plainCode) {
     throw new Error("Bawa is not configured (BAWA_TOKEN / BAWA_INSTANCE_ID)");
   }
   const jid = `${whatsappDigits}@s.whatsapp.net`;
-  const message = `Your Ismaal password reset code is: ${plainCode}. It expires in 15 minutes. If you did not request this, ignore this message.`;
   const apiUrl = `https://bawa.app/api/v1/send-text?token=${token}&instance_id=${instanceId}&jid=${jid}&msg=${encodeURIComponent(
     message,
   )}`;
@@ -313,6 +319,97 @@ async function sendBawaPasswordResetCode(whatsappDigits, plainCode) {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function sendBawaPasswordResetCode(whatsappDigits, plainCode) {
+  const message = `Your Ismaal password reset code is: ${plainCode}. It expires in 15 minutes. If you did not request this, ignore this message.`;
+  return sendBawaWhatsAppText(whatsappDigits, message);
+}
+
+async function sendBawaLoginVerificationCode(whatsappDigits, plainCode) {
+  const message = `Your Ismaal admin login verification code is: ${plainCode}. It expires in 10 minutes. If you did not request this, ignore this message.`;
+  return sendBawaWhatsAppText(whatsappDigits, message);
+}
+
+const LOGIN_CODE_TTL_MS = 10 * 60 * 1000;
+
+async function issueLoginVerificationCode(user) {
+  if (!user.phone || !String(user.phone).trim()) {
+    const err = new Error(
+      "No phone number on this admin account. Please add a phone number before logging in.",
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  await prisma.loginVerificationToken.updateMany({
+    where: { userId: user.id, used: false },
+    data: { used: true },
+  });
+
+  const plainCode = generateNumericCode(6);
+  const tokenHash = await bcrypt.hash(plainCode, 10);
+  const expiresAt = new Date(Date.now() + LOGIN_CODE_TTL_MS);
+
+  const verificationRow = await prisma.loginVerificationToken.create({
+    data: {
+      userId: user.id,
+      token: tokenHash,
+      expiresAt,
+    },
+  });
+
+  const waPhone = formatPhoneForWhatsApp(user.phone);
+  try {
+    await sendBawaLoginVerificationCode(waPhone, plainCode);
+  } catch (bawaErr) {
+    await prisma.loginVerificationToken
+      .delete({ where: { id: verificationRow.id } })
+      .catch(() => {});
+    throw bawaErr;
+  }
+
+  return maskPhoneNumber(user.phone);
+}
+
+async function findUserByNormalizedEmail(email) {
+  const normalizedEmail = String(email).trim().toLowerCase();
+  let user = await prisma.user.findUnique({
+    where: { email: normalizedEmail },
+  });
+  if (!user) {
+    const rows = await prisma.$queryRaw`
+      SELECT id FROM User WHERE LOWER(email) = ${normalizedEmail} LIMIT 1`;
+    const legacyId = rows?.[0]?.id;
+    if (legacyId != null) {
+      user = await prisma.user.findUnique({ where: { id: Number(legacyId) } });
+    }
+  }
+  return user;
+}
+
+async function verifyLoginCodeForUser(user, codeTrim) {
+  const verificationRow = await prisma.loginVerificationToken.findFirst({
+    where: {
+      userId: user.id,
+      used: false,
+      expiresAt: { gt: new Date() },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (!verificationRow || !String(verificationRow.token).startsWith("$2")) {
+    return false;
+  }
+
+  return bcrypt.compare(codeTrim, verificationRow.token).then(async (match) => {
+    if (!match) return false;
+    await prisma.loginVerificationToken.update({
+      where: { id: verificationRow.id },
+      data: { used: true },
+    });
+    return true;
+  });
 }
 
 // POST /api/auth/forgot-password — sends a 6-digit code via Bawa WhatsApp
@@ -889,38 +986,87 @@ app.delete("/api/admin/categories/:id", async (req, res) => {
   }
 });
 
-// Admin Login - Only allows users with ADMIN role
+// Admin Login - Step 1: validate credentials, send 6-digit WhatsApp code
 app.post("/api/auth/admin/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Validate input
     if (!email || !password) {
       return res.status(400).json({ error: "Email and password are required" });
     }
 
-    // Find user by email
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = await findUserByNormalizedEmail(email);
 
     if (!user) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // Verify password
     const validPassword = await bcrypt.compare(password, user.password);
 
     if (!validPassword) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // Check if user is ADMIN
     if (user.role !== "ADMIN") {
       return res.status(403).json({
         error: "Access denied. Admin privileges required.",
       });
     }
 
-    // Return user data without password
+    let maskedPhone;
+    try {
+      maskedPhone = await issueLoginVerificationCode(user);
+    } catch (sendErr) {
+      console.error("Admin login WhatsApp send error:", sendErr);
+      const status = sendErr.statusCode || 502;
+      return res.status(status).json({
+        error:
+          sendErr.message ||
+          "Could not send verification code. Please try again later.",
+      });
+    }
+
+    res.json({
+      requiresVerification: true,
+      email: user.email,
+      maskedPhone,
+      message: `A 6-digit verification code has been sent to your WhatsApp (${maskedPhone}).`,
+    });
+  } catch (error) {
+    console.error("Admin login error:", error);
+    res.status(500).json({ error: "Login failed. Please try again." });
+  }
+});
+
+// Admin Login - Step 2: verify WhatsApp code and complete login
+app.post("/api/auth/admin/verify-login", async (req, res) => {
+  try {
+    const { email, code } = req.body;
+    const codeTrim = code != null ? String(code).trim() : "";
+
+    if (!email || !codeTrim) {
+      return res
+        .status(400)
+        .json({ error: "Email and verification code are required" });
+    }
+
+    if (!/^\d{6}$/.test(codeTrim)) {
+      return res
+        .status(400)
+        .json({ error: "Verification code must be exactly 6 digits" });
+    }
+
+    const user = await findUserByNormalizedEmail(email);
+
+    if (!user || user.role !== "ADMIN") {
+      return res.status(400).json({ error: "Invalid or expired verification code" });
+    }
+
+    const isValid = await verifyLoginCodeForUser(user, codeTrim);
+    if (!isValid) {
+      return res.status(400).json({ error: "Invalid or expired verification code" });
+    }
+
     const { password: _, ...userWithoutPassword } = user;
 
     res.json({
@@ -928,8 +1074,51 @@ app.post("/api/auth/admin/login", async (req, res) => {
       message: "Admin login successful",
     });
   } catch (error) {
-    console.error("Admin login error:", error);
-    res.status(500).json({ error: "Login failed. Please try again." });
+    console.error("Admin verify-login error:", error);
+    res.status(500).json({ error: "Verification failed. Please try again." });
+  }
+});
+
+// Admin Login - resend WhatsApp verification code
+app.post("/api/auth/admin/resend-login-code", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: "Email is required" });
+    }
+
+    const user = await findUserByNormalizedEmail(email);
+
+    if (!user || user.role !== "ADMIN") {
+      return res.json({
+        success: true,
+        message:
+          "If your account is eligible, a new verification code has been sent to your WhatsApp.",
+      });
+    }
+
+    let maskedPhone;
+    try {
+      maskedPhone = await issueLoginVerificationCode(user);
+    } catch (sendErr) {
+      console.error("Admin resend login code error:", sendErr);
+      const status = sendErr.statusCode || 502;
+      return res.status(status).json({
+        error:
+          sendErr.message ||
+          "Could not send verification code. Please try again later.",
+      });
+    }
+
+    res.json({
+      success: true,
+      maskedPhone,
+      message: `A new 6-digit verification code has been sent to your WhatsApp (${maskedPhone}).`,
+    });
+  } catch (error) {
+    console.error("Admin resend-login-code error:", error);
+    res.status(500).json({ error: "Could not resend code. Please try again." });
   }
 });
 
@@ -1251,6 +1440,8 @@ app.get("/api/users", async (req, res) => {
         name: true,
         email: true,
         phone: true,
+        location: true,
+        description: true,
         role: true,
         plan_id: true,
         createdAt: true,
@@ -1576,6 +1767,17 @@ const validateUpdateUserData = (data) => {
     return "Description must be 2000 characters or less.";
   }
 
+  if (data.role !== undefined && !["USER", "ADMIN"].includes(data.role)) {
+    return "Role must be USER or ADMIN.";
+  }
+
+  if (data.plan_id !== undefined) {
+    const planId = parseInt(String(data.plan_id), 10);
+    if (Number.isNaN(planId) || planId <= 0) {
+      return "plan_id must be a valid positive number.";
+    }
+  }
+
   return null; // Validation passed
 };
 
@@ -1636,8 +1838,17 @@ app.patch("/api/users/:id", isAuthenticated, async (req, res) => {
     );
     console.log("Update data:", req.body);
 
-    const { name, email, phone, location, password, image, description } =
-      req.body;
+    const {
+      name,
+      email,
+      phone,
+      location,
+      password,
+      image,
+      description,
+      role,
+      plan_id,
+    } = req.body;
 
     // Convert IDs to numbers to match Prisma schema
     const currentUserIdNum = parseInt(currentUserId);
@@ -1660,6 +1871,8 @@ app.patch("/api/users/:id", isAuthenticated, async (req, res) => {
       return res.status(400).json({ error: "Invalid ID format" });
     }
 
+    const admin = await requestUserIsAdmin(req);
+
     const payloadForValidation = {
       ...(name !== undefined && { name }),
       ...(email !== undefined && { email }),
@@ -1673,14 +1886,16 @@ app.patch("/api/users/:id", isAuthenticated, async (req, res) => {
             ? ""
             : String(description),
       }),
+      ...(admin && role !== undefined && { role }),
+      ...(admin && plan_id !== undefined && { plan_id }),
     };
     const validationErr = validateUpdateUserData(payloadForValidation);
     if (validationErr) {
       return res.status(400).json({ error: validationErr });
     }
 
-    // Security check: users can only update their own profile
-    if (currentUserIdNum !== userIdToUpdateNum) {
+    // Security check: users can update their own profile; admins can update any user
+    if (!admin && currentUserIdNum !== userIdToUpdateNum) {
       console.log("❌ Authorization mismatch:", {
         currentUser: currentUserIdNum,
         targetUser: userIdToUpdateNum,
@@ -1691,7 +1906,9 @@ app.patch("/api/users/:id", isAuthenticated, async (req, res) => {
     }
 
     console.log(
-      "✅ Authorization verified - user can update their own profile",
+      admin
+        ? "✅ Authorization verified - admin updating user profile"
+        : "✅ Authorization verified - user can update their own profile",
     );
 
     // 1. Find the user first
@@ -1712,10 +1929,16 @@ app.patch("/api/users/:id", isAuthenticated, async (req, res) => {
 
     // 2. Prepare update data (Prisma updates `updatedAt` via @updatedAt on the model)
     const updateData = {
-      ...(name !== undefined && { name }),
-      ...(email !== undefined && { email }),
-      ...(phone !== undefined && { phone }),
-      ...(location !== undefined && { location }),
+      ...(name !== undefined && { name: String(name).trim() }),
+      ...(email !== undefined && { email: String(email).trim().toLowerCase() }),
+      ...(phone !== undefined && {
+        phone:
+          phone === null || phone === "" ? null : String(phone).trim(),
+      }),
+      ...(location !== undefined && {
+        location:
+          location === null || location === "" ? null : String(location).trim(),
+      }),
       ...(image !== undefined && {
         image: image === null || image === "" ? null : String(image).trim(),
       }),
@@ -1726,6 +1949,23 @@ app.patch("/api/users/:id", isAuthenticated, async (req, res) => {
             : String(description).trim().slice(0, 2000),
       }),
     };
+
+    if (admin) {
+      if (role !== undefined) {
+        updateData.role = role;
+      }
+      if (plan_id !== undefined) {
+        const planIdNum = parseInt(String(plan_id), 10);
+        const planExists = await prisma.plans.findUnique({
+          where: { id: planIdNum },
+          select: { id: true },
+        });
+        if (!planExists) {
+          return res.status(400).json({ error: "Selected plan does not exist." });
+        }
+        updateData.plan_id = planIdNum;
+      }
+    }
 
     // Handle password hashing if provided
     if (password) {
