@@ -307,9 +307,16 @@ async function sendBawaWhatsAppText(whatsappDigits, message) {
       const detail =
         responseData?.message ||
         responseData?.error ||
+        responseData?.rawResponse ||
         `HTTP ${response.status}: ${response.statusText || ""}`;
+      console.error("[Bawa] send failed:", {
+        status: response.status,
+        jid,
+        responseData,
+      });
       throw new Error(detail);
     }
+    console.log("[Bawa] message sent:", { jid });
     return true;
   } catch (err) {
     if (err.name === "AbortError") {
@@ -336,13 +343,22 @@ const LOGIN_CODE_TTL_MS = 10 * 60 * 1000;
 async function issueLoginVerificationCode(user) {
   if (!user.phone || !String(user.phone).trim()) {
     const err = new Error(
-      "No phone number on this admin account. Please add a phone number before logging in.",
+      "No phone number on this admin account. Add a phone number in Users before logging in.",
     );
     err.statusCode = 400;
     throw err;
   }
 
-  await prisma.loginVerificationToken.updateMany({
+  if (!hasValidPhoneLength(user.phone)) {
+    const err = new Error(
+      "The phone number on this admin account is invalid. Update it in Users (8–15 digits).",
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Reuse password_reset_tokens (already on production DB) — no extra migration required.
+  await prisma.passwordResetToken.updateMany({
     where: { userId: user.id, used: false },
     data: { used: true },
   });
@@ -351,7 +367,7 @@ async function issueLoginVerificationCode(user) {
   const tokenHash = await bcrypt.hash(plainCode, 10);
   const expiresAt = new Date(Date.now() + LOGIN_CODE_TTL_MS);
 
-  const verificationRow = await prisma.loginVerificationToken.create({
+  const verificationRow = await prisma.passwordResetToken.create({
     data: {
       userId: user.id,
       token: tokenHash,
@@ -360,13 +376,29 @@ async function issueLoginVerificationCode(user) {
   });
 
   const waPhone = formatPhoneForWhatsApp(user.phone);
+  if (!waPhone || waPhone.length < 8) {
+    await prisma.passwordResetToken
+      .delete({ where: { id: verificationRow.id } })
+      .catch(() => {});
+    const err = new Error(
+      "Could not format this phone number for WhatsApp. Update the number in Users.",
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
   try {
     await sendBawaLoginVerificationCode(waPhone, plainCode);
   } catch (bawaErr) {
-    await prisma.loginVerificationToken
+    await prisma.passwordResetToken
       .delete({ where: { id: verificationRow.id } })
       .catch(() => {});
-    throw bawaErr;
+    const err = new Error(
+      bawaErr?.message ||
+        "Could not send verification code via WhatsApp. Please try again later.",
+    );
+    err.statusCode = 502;
+    throw err;
   }
 
   return maskPhoneNumber(user.phone);
@@ -389,7 +421,7 @@ async function findUserByNormalizedEmail(email) {
 }
 
 async function verifyLoginCodeForUser(user, codeTrim) {
-  const verificationRow = await prisma.loginVerificationToken.findFirst({
+  const verificationRow = await prisma.passwordResetToken.findFirst({
     where: {
       userId: user.id,
       used: false,
@@ -404,7 +436,7 @@ async function verifyLoginCodeForUser(user, codeTrim) {
 
   return bcrypt.compare(codeTrim, verificationRow.token).then(async (match) => {
     if (!match) return false;
-    await prisma.loginVerificationToken.update({
+    await prisma.passwordResetToken.update({
       where: { id: verificationRow.id },
       data: { used: true },
     });
@@ -1034,7 +1066,15 @@ app.post("/api/auth/admin/login", async (req, res) => {
     });
   } catch (error) {
     console.error("Admin login error:", error);
-    res.status(500).json({ error: "Login failed. Please try again." });
+    if (error.code === "P2021") {
+      return res.status(500).json({
+        error:
+          "Server database is missing required tables. Run prisma migrate deploy on the backend.",
+      });
+    }
+    res.status(500).json({
+      error: error.message || "Login failed. Please try again.",
+    });
   }
 });
 
