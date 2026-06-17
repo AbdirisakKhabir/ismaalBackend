@@ -99,8 +99,8 @@ const upload = multer({ storage: multer.memoryStorage() });
 app.use(cors());
 app.use(express.json());
 
-// App version config (in-memory; replace with DB if needed)
-let appVersionConfig = {
+// App version config (persisted in systemConfig)
+const DEFAULT_APP_VERSION_CONFIG = {
   latestVersion: "1.0.0",
   minVersion: "1.0.0",
   androidUrl: "",
@@ -109,6 +109,40 @@ let appVersionConfig = {
   releaseNotes: "",
   updatedAt: new Date().toISOString(),
 };
+
+let appVersionConfig = { ...DEFAULT_APP_VERSION_CONFIG };
+
+async function getAppVersionConfig() {
+  try {
+    const row = await prisma.systemConfig.findUnique({
+      where: { key: "app_version_config" },
+    });
+    if (row?.value) {
+      const parsed = JSON.parse(row.value);
+      return { ...DEFAULT_APP_VERSION_CONFIG, ...parsed };
+    }
+  } catch (e) {
+    console.warn("App version config from DB failed:", e.message);
+  }
+  return appVersionConfig;
+}
+
+async function saveAppVersionConfig(config) {
+  await prisma.systemConfig.upsert({
+    where: { key: "app_version_config" },
+    create: { key: "app_version_config", value: JSON.stringify(config) },
+    update: { value: JSON.stringify(config) },
+  });
+  appVersionConfig = config;
+}
+
+getAppVersionConfig()
+  .then((config) => {
+    appVersionConfig = config;
+  })
+  .catch((e) => {
+    console.warn("Failed to load app version config on startup:", e.message);
+  });
 
 app.post("/api/auth/register", async (req, res) => {
   try {
@@ -614,8 +648,14 @@ app.post("/api/auth/reset-password", async (req, res) => {
 });
 
 // App version endpoints
-app.get("/api/app-version", (req, res) => {
-  res.json(appVersionConfig);
+app.get("/api/app-version", async (req, res) => {
+  try {
+    const config = await getAppVersionConfig();
+    res.json(config);
+  } catch (error) {
+    console.error("Get app version error:", error);
+    res.status(500).json({ error: "Failed to load app version" });
+  }
 });
 
 // GET /api/admin/email-config (Admin only)
@@ -695,33 +735,39 @@ app.put("/api/admin/email-config", async (req, res) => {
   }
 });
 
-app.put("/api/app-version", (req, res) => {
-  const {
-    latestVersion,
-    minVersion,
-    androidUrl,
-    iosUrl,
-    forceUpdate,
-    releaseNotes,
-  } = req.body || {};
+app.put("/api/app-version", async (req, res) => {
+  try {
+    const {
+      latestVersion,
+      minVersion,
+      androidUrl,
+      iosUrl,
+      forceUpdate,
+      releaseNotes,
+    } = req.body || {};
 
-  if (!latestVersion || !minVersion) {
-    return res.status(400).json({
-      error: "latestVersion and minVersion are required",
-    });
+    if (!latestVersion || !minVersion) {
+      return res.status(400).json({
+        error: "latestVersion and minVersion are required",
+      });
+    }
+
+    const updated = {
+      latestVersion,
+      minVersion,
+      androidUrl: androidUrl || "",
+      iosUrl: iosUrl || "",
+      forceUpdate: Boolean(forceUpdate),
+      releaseNotes: releaseNotes || "",
+      updatedAt: new Date().toISOString(),
+    };
+
+    await saveAppVersionConfig(updated);
+    res.json(updated);
+  } catch (error) {
+    console.error("Update app version error:", error);
+    res.status(500).json({ error: "Failed to save app version" });
   }
-
-  appVersionConfig = {
-    latestVersion,
-    minVersion,
-    androidUrl: androidUrl || "",
-    iosUrl: iosUrl || "",
-    forceUpdate: Boolean(forceUpdate),
-    releaseNotes: releaseNotes || "",
-    updatedAt: new Date().toISOString(),
-  };
-
-  res.json(appVersionConfig);
 });
 
 // --- Lookup: cities & categories (public read, admin CRUD) ---
